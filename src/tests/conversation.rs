@@ -722,7 +722,6 @@ fn retry_reruns_the_turn_against_the_same_history() {
     let assistant_id = rt.state.sessions[0].messages[1].id.clone();
 
     rt.update(|s, _| s.retry(&assistant_id));
-    rt.frame(1.0 / 60.0);
     let session = &rt.state.sessions[0];
     assert_eq!(session.messages.len(), 2, "the old answer is dropped");
     assert_eq!(session.messages[0].text, "What is 2 + 2?");
@@ -733,8 +732,13 @@ fn retry_reruns_the_turn_against_the_same_history() {
     );
     assert!(rt.state.pending);
 
-    // The retried turn settles like any other.
-    rt.frame(1.0);
+    for _ in 0..400 {
+        rt.frame(1.0);
+        if !rt.state.pending {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     assert!(!rt.state.pending, "the mock answers and the turn settles");
     assert_eq!(rt.state.sessions[0].messages[1].text, "Hi!");
 }

@@ -1,6 +1,9 @@
 use std::rc::Rc;
+use std::sync::Mutex;
+use std::sync::mpsc::{Receiver, Sender, channel};
 
 use super::*;
+use crate::agent::AgentDirectory;
 use crate::chat::{AddApplicationError, Application};
 use crate::loading::{PaneView, Screen};
 use crate::palette::AppColour;
@@ -91,9 +94,56 @@ fn adding_an_application_activates_it_and_a_duplicate_app_id_is_refused() {
     assert_eq!(rt.state.active, Some(2), "and nothing switched");
 }
 
+struct Held {
+    inner: Arc<dyn AgentDirectory>,
+    gate: Arc<Mutex<Receiver<()>>>,
+}
+
+impl Held {
+    fn wait(&self) {
+        let _ = self.gate.lock().unwrap().recv();
+    }
+}
+
+impl AgentDirectory for Held {
+    fn list(&self) -> Result<Vec<AgentInfo>, String> {
+        self.wait();
+        self.inner.list()
+    }
+
+    fn sessions(&self, agent_id: &str) -> Result<Vec<SessionInfo>, String> {
+        self.wait();
+        self.inner.sessions(agent_id)
+    }
+
+    fn conversation(&self, agent_id: &str, id: &str) -> Result<Vec<ChatMessage>, String> {
+        self.wait();
+        self.inner.conversation(agent_id, id)
+    }
+}
+
+/// Holds every directory call until the returned sender is dropped.
+fn hold_directory_loads(rt: &mut Runtime<Chat>) -> Sender<()> {
+    let (release, gate) = channel();
+    let gate = Arc::new(Mutex::new(gate));
+    rt.update(|s, _| {
+        let inner = s.connector.clone();
+        s.connector = Rc::new(move |application: &Application| {
+            let (client, directory) = inner(application);
+            let held: Arc<dyn AgentDirectory> = Arc::new(Held {
+                inner: directory,
+                gate: gate.clone(),
+            });
+            (client, held)
+        });
+    });
+    release
+}
+
 #[test]
 fn switching_to_an_application_with_a_remembered_agent_opens_it_without_a_splash() {
     let mut rt = two_apps();
+    let release = hold_directory_loads(&mut rt);
     rt.update(|s, _| {
         s.applications[1].last_agent = Some(("bbb-2".into(), "bbb agent two".into()));
         s.switch_application(1);
@@ -117,6 +167,7 @@ fn switching_to_an_application_with_a_remembered_agent_opens_it_without_a_splash
         "no stale or starter content"
     );
 
+    drop(release);
     land(&mut rt, |s| {
         s.sessions[0].history.is_settled()
             || s.sessions_load.is_settled() && s.sessions.len() == 1 && s.sessions[0].id.is_some()
