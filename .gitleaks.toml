@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Known files/folders to ignore"
+paths = [
+  '''state/''',
+  '''target/''',
+  '''\.env'''
+]

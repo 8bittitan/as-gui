@@ -1,0 +1,8 @@
+[
+  { "t": 0.2, "type": "tap", "key": "agent-mock-shopping" },
+  { "t": 0.8, "type": "tap", "key": "composer" },
+  { "t": 1.0, "type": "type", "text": "Tell me about Agent Studio" },
+  { "t": 2.5, "type": "tap", "key": "send" },
+  { "t": 3.5, "type": "tap", "key": "tools" },
+  { "t": 4.2, "type": "tap", "key": "tool-schedule_task_tool" }
+]

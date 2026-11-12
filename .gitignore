@@ -1,0 +1,6 @@
+logs/
+state/
+target/
+.DS_Store
+.env
+demos/

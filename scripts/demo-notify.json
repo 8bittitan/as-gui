@@ -1,0 +1,6 @@
+{"events": [
+  {"t": 1.0, "type": "tap", "key": "agent-mock-shopping"},
+  {"t": 2.4, "type": "tap", "key": "starter-0"},
+  {"t": 3.6, "type": "tap", "key": "send"},
+  {"t": 11.2, "type": "mark", "name": "end"}
+]}

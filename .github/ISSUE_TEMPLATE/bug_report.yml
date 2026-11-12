@@ -1,0 +1,39 @@
+name: Bug report
+description: Something does not work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the command bar
+        2. ...
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: The release you downloaded, or the commit if you built from source.
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and chip
+      placeholder: macOS 15.1, Apple Silicon
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output
+      description: |
+        Run with LOG_LEVEL=debug and paste the relevant lines from
+        ~/Library/Logs/com.8bittitan.as-gui/. Logs never hold your API key or message text, but check
+        for anything private before you paste.
+      render: text

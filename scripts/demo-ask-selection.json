@@ -1,0 +1,7 @@
+{"displays": [{"id": 1, "frame": [0, 0, 1280, 800], "scale": 2, "primary": true}],
+ "events": [
+  {"t": 2.4, "type": "shortcut", "chord": "cmd+shift+a"},
+  {"t": 3.8, "type": "type", "text": "What should she use instead?", "every": 0.06},
+  {"t": 5.8, "type": "key", "name": "Enter"},
+  {"t": 11.5, "type": "mark", "name": "end"}
+]}

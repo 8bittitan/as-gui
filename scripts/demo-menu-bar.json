@@ -1,0 +1,7 @@
+{"displays": [{"id": 1, "frame": [0, 0, 1280, 800], "scale": 2, "primary": true}],
+ "events": [
+  {"t": 3.0, "type": "shortcut", "chord": "cmd+shift+space"},
+  {"t": 4.2, "type": "type", "text": "Which running shoes suit wide feet?", "every": 0.06},
+  {"t": 6.6, "type": "key", "name": "Enter"},
+  {"t": 11.5, "type": "mark", "name": "end"}
+]}

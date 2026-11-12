@@ -1,0 +1,17 @@
+[
+  {"t": 2.3, "type": "tap", "key": "agent-mock-shopping"},
+  {"t": 3.5, "type": "tap", "key": "starter-0"},
+  {"t": 4.7, "type": "tap", "key": "send"},
+  {"t": 9.0, "type": "tap", "key": "tools"},
+  {"t": 10.0, "type": "tap", "key": "tool-search_tool"},
+  {"t": 12.0, "type": "tap", "key": "hit-search_tool-0"},
+  {"t": 15.0, "type": "key", "name": "Escape"},
+  {"t": 16.5, "type": "key", "name": ",", "cmd": true},
+  {"t": 18.0, "type": "tap", "key": "accent-purple"},
+  {"t": 19.0, "type": "tap", "key": "chat-width-trigger"},
+  {"t": 20.0, "type": "tap", "key": "option1"},
+  {"t": 21.0, "type": "key", "name": "Escape"},
+  {"t": 22.5, "type": "key", "name": "b", "cmd": true},
+  {"t": 24.0, "type": "key", "name": "b", "cmd": true},
+  {"t": 25.5, "type": "mark", "name": "end"}
+]
