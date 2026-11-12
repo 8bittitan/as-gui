@@ -40,7 +40,7 @@ rune-notify = { git = "https://github.com/anomalyco/rune.git", rev = "04b38ae0a7
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5.2"
-objc2-app-kit = { version = "0.2.2", features = [
+objc2-app-kit = { version = "0.3.2", features = [
   "NSScreen",
   "NSPasteboard",
   "NSPasteboardItem",
