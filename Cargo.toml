@@ -8,6 +8,12 @@ license = "MIT"
 edition = "2024"
 publish = false
 
+[lib]
+# The doc comments contain code-like inline text rustdoc would compile as doctests; each
+# doctest is a fresh executable and every rebuilt executable can raise the Jamf
+# `familyControlsEnabled` permission dialog on the dev Mac (see AGENTS.md).
+doctest = false
+
 [profile.release]
 incremental = true
 strip = true

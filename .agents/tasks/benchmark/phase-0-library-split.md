@@ -1,6 +1,6 @@
 # Phase 0: Split as-gui into a library and a thin binary
 
-**Status:** ready to implement
+**Status:** done — landed as a single commit on branch `feat/phase-0-library-split` (`984de44`)
 **Goal:** make the crate importable so later benchmark phases can drive `Chat` from `examples/` and `benches/`. This phase contains **no benchmark code** and must produce zero behaviour change.
 **Commit:** land on its own branch as a single commit before any benchmark work starts.
 
@@ -94,10 +94,16 @@ Confirm the tree JSON has the same shape as before the split (window titled `as-
 
 ## Definition of done
 
-- [ ] `src/lib.rs` holds all modules, `pub fn run()`, `SCENES`, `mock_chat`
-- [ ] `src/main.rs` is three lines
-- [ ] `[lib] doctest = false` in `Cargo.toml`
-- [ ] `just check` passes; CI's two clippy/test lines pass
-- [ ] No module gained `pub` beyond `run()`
-- [ ] `ARCHITECTURE.md` mentions the lib/bin split
-- [ ] `--tree` smoke run unchanged
+- [x] `src/lib.rs` holds all modules, `pub fn run()`, `SCENES`, `mock_chat`
+- [x] `src/main.rs` is three lines
+- [x] `[lib] doctest = false` in `Cargo.toml`
+- [x] `just check` passes; CI's two clippy/test lines pass (543 tests, default features)
+- [x] No module gained `pub` beyond `run()`
+- [x] `ARCHITECTURE.md` mentions the lib/bin split
+- [x] `--tree` smoke run unchanged (window `as-gui`, `agent-picker` present at `--at 3`; the frame-0 tree is splash-only, the picker needs a few seconds)
+
+## Notes
+
+- `CONTRIBUTING.md` doesn't reference `src/main.rs`, so it needed no change.
+- The `crate::`/`super::` grep found nothing: modules moved to the lib crate root with identical paths, so `src/tests/mod.rs` worked unchanged.
+- The one visible diff in output was the test binary name moving from `unittests src/main.rs` to `unittests src/lib.rs`; nothing else changed.
