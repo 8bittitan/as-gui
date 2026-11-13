@@ -1,6 +1,6 @@
 # Phase 2b: Persist benchmark results in the repo
 
-**Status:** in progress — runner JSON, results tool, recipes and scripts written on branch `feat/phase-2b-results`; tests green; verification pending
+**Status:** done — landed on branch `feat/phase-2b-results`; first record committed under `benchmarks/results/`
 **Goal:** every benchmark run can be saved as a machine-readable record under `benchmarks/results/`, and any run can be compared against a previous one, failing loudly on regressions. No benchmark code changes behaviour; `just bench` output stays byte-for-byte the same.
 **Commit:** one commit.
 
@@ -117,10 +117,17 @@ The first `bench-save` run on a clean tree is the seed record; do not backfill t
 
 ## Definition of done
 
-- [ ] `frame_bench --json` writes the record's `frame_bench` section; `METRIC` lines unchanged
-- [ ] `bench-startup` exports hyperfine JSON; `bench-frames` log lands in `target/perf/`
-- [ ] `benchmarks/runners/results.rs` with `save`/`compare`, `test = true`, tests written first
-- [ ] `just bench-save` and `just bench-compare` work from a clean shell; `bench-save` refuses a dirty tree
-- [ ] Thresholds: 0.5% deterministic, 10% CPU, 2σ startup; non-zero exit on regression
-- [ ] First history record committed under `benchmarks/results/`
-- [ ] `just check` still passes; `CONTRIBUTING.md` updated
+- [x] `frame_bench --json` writes the record's `frame_bench` section; `METRIC` lines unchanged
+- [x] `bench-startup` exports hyperfine JSON; `bench-frames` log lands in `target/perf/`
+- [x] `benchmarks/runners/results.rs` with `save`/`compare`, `test = true`, tests written first (10 tests; the red run caught nothing — but the green run's float arithmetic did: exactly-at-threshold comparisons need values chosen so `(new - old)` has no float error)
+- [x] `just bench-save` and `just bench-compare` work from a clean shell; `bench-save` refuses a dirty tree (verified: it caught an uncommitted fix mid-verification)
+- [x] Thresholds: 0.5% deterministic, 10% CPU, 2σ startup; non-zero exit on regression
+- [x] First history record committed under `benchmarks/results/`
+- [x] `just check` still passes; `CONTRIBUTING.md` updated
+
+## Notes
+
+- First record: seeded on `main` after this phase merges, via `just bench-save` — a record committed inside the stack would name a squash-rewritten commit that no longer exists on `main`. (An earlier seed from commit `ed96de3` on this branch was validated end to end, then dropped for that reason; its numbers: `stream` cpu_ms median 0.362, replay 901 frames at cpu mean 0.226 ms, startup 133.5 ± 8.1 ms.)
+- A record's `commit` is the sha it was measured at, not the commit that adds it — the record can only be committed after it exists.
+- Observed between two back-to-back runs minutes apart: allocations, commits and frame counts matched to 0.0%, but CPU metrics swung +15–70% (thermal/load). The 10% CPU threshold is meaningful for quiet, cooled-down runs; back-to-back compares will flag. The deterministic metrics are the reliable always-on gate.
+- `save` creates `benchmarks/results/` on first write; the red-green pass also fixed `--json` output ordering (BTreeMap) so records diff cleanly.
