@@ -1,6 +1,6 @@
 # Phase 1: Frame-timing and startup benchmarks from the command line
 
-**Status:** ready to implement (requires Phase 0 landed first)
+**Status:** done — landed as a single commit on branch `feat/phase-1-frame-timing`
 **Goal:** measure per-frame CPU cost of a realistic session and process startup time, using Rune's built-in headless tooling and hyperfine. Almost no Rust code in this phase — a profile, a drive script, three `just` recipes and docs.
 **Commit:** one commit after Phase 0.
 
@@ -105,10 +105,22 @@ Record a baseline: paste the `bench-frames` per-frame stats and hyperfine's mean
 
 ## Definition of done
 
-- [ ] `[profile.perf]` in `Cargo.toml` matches Rune's, plus `strip = false`
-- [ ] `scripts/bench.json` replays cleanly (no missing-key failures) and covers send, tool card, scroll, ⌘K, settings/theme
-- [ ] `bench-build`, `bench-frames`, `bench-startup` recipes work from a clean shell
-- [ ] `hyperfine` pinned in `mise.toml`
-- [ ] `CONTRIBUTING.md` has the Benchmarks section
-- [ ] `just check` still passes (the profile change must not affect the gate)
-- [ ] Baseline numbers recorded in the PR
+- [x] `[profile.perf]` in `Cargo.toml` matches Rune's, plus `strip = false`
+- [x] `scripts/bench.json` replays cleanly (no missing-key failures) and covers send, tool card, scroll, ⌘K, settings/theme
+- [x] `bench-build`, `bench-frames`, `bench-startup` recipes work from a clean shell
+- [x] `hyperfine` pinned in `mise.toml` (1.21.0, the latest mise carries; the task predated it)
+- [x] `CONTRIBUTING.md` has the Benchmarks section
+- [x] `just check` still passes (the profile change must not affect the gate)
+- [x] Baseline numbers recorded (see below; paste into the PR description)
+
+## Baseline (dev Mac, 2026-11-13, Rune `04b38ae`)
+
+- `bench-frames`: 901 frames at 60 fps, first frame 1.75 ms, gpu init 8.3 ms — frame CPU mean 0.262 ms, p50 0.188 ms, p95 0.388 ms, max 16.029 ms
+- `bench-startup`: 117.9 ms ± 2.3 ms (7 runs, 1 warmup; min 115.6, max 122.6)
+
+## Notes
+
+- Rune's `scroll` event at this pin takes `dx`/`dy`/`dur` fields (an eased wheel swipe, optionally at a `key`), not `[width, height, dy]`; the script uses `{"type": "scroll", "key": "thread", "dy": 240, "dur": 0.4}`.
+- Tapping `composer` (the card) does not focus the text field, so the typed question never lands and `send` submits nothing. The script taps `input` (the field inside the card) instead. For the same reason `scripts/chat.json` does not replay under `AS_GUI_DEMO=1` with this build; the tap on `tool-search_tool` (not `tool-schedule_task_tool`) is correct for the demo agent, which is what `AS_GUI_DEMO=1` picks.
+- Verified end state after a full replay: command bar and settings dialog both closed, tool card present mid-run.
+- Theme segment tapped via element path `theme-segments/segment1` (Rune resolves `/` paths against the element's keyed ancestors).

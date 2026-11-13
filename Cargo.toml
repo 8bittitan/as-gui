@@ -12,6 +12,18 @@ publish = false
 incremental = true
 strip = true
 
+# Benchmarks and perf numbers. Same codegen as release, without incremental, which can move
+# frame timings. Copied from Rune's workspace (Cargo ignores dependency profiles). Unstripped
+# on purpose, so a perf or Instruments attach works later.
+[profile.perf]
+inherits = "release"
+opt-level = 3
+codegen-units = 16
+lto = false
+debug = false
+incremental = false
+strip = false
+
 # Dependencies build optimized in debug too: unoptimized text shaping and glyph rasterising
 # stalled the first frame that showed new text (a tool card opening) for a visible beat. Only
 # this crate stays at opt-level 0, so incremental builds keep their speed.

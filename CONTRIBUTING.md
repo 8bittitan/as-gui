@@ -67,6 +67,17 @@ Two things to know when writing UI tests:
 - Modal controls are not clickable until their entrance animation settles. Call the `settle` helper before tapping.
 - A popup that opens from inside a dialog must be added to the layer list after the dialog is built. Rune only resolves an anchor against earlier nodes.
 
+## Benchmarks
+
+Three recipes measure performance. `just bench-build` compiles the benchmark binary with the `perf` profile — the same codegen as release, without incremental, which can move frame timings. It is copied from Rune's own workspace profile and left unstripped on purpose, so `perf` or Instruments can attach to `target/perf/as-gui`.
+
+- `just bench-frames` replays `scripts/bench.json` headlessly (pick agent, send a question, wait for the streamed reply, open a tool card, scroll, ⌘K with a query, settings theme switch) and prints Rune's per-frame CPU stats: update, build and encode/submit time per frame, without readback.
+- `just bench-startup` times process startup with [hyperfine](https://github.com/sharkdp/hyperfine) (one warmup, seven runs), using `--snap --scene conversation`, which runs fully offscreen and exits.
+
+Numbers are only comparable on the same machine and the same Rune revision; `AS_GUI_DEMO=1` keeps the agent deterministic so the replays match across machines. Record baselines in pull requests so later changes can be compared against them.
+
+Phase 2 (`.agents/tasks/benchmark/phase-2-frame-bench.md`) adds scenario-level benchmarks with `cargo run --example frame_bench`.
+
 ## Recording the demos
 
 The demos need `ffmpeg`. `just demo <name>` writes `demos/<name>.mp4`, and the videos are not committed. `just demo` records the tour, `just demo all` records every demo in turn, and `scripts/demo.sh <name>` does the same without `just`.

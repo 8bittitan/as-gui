@@ -1,0 +1,15 @@
+[
+  { "t": 0.2, "type": "tap", "key": "agent-mock-shopping" },
+  { "t": 0.8, "type": "tap", "key": "input" },
+  { "t": 1.0, "type": "type", "text": "Which shoes fit wide feet?" },
+  { "t": 2.5, "type": "tap", "key": "send" },
+  { "t": 6.5, "type": "tap", "key": "tool-search_tool" },
+  { "t": 7.5, "type": "scroll", "key": "thread", "dy": 240, "dur": 0.4 },
+  { "t": 8.8, "type": "key", "name": "k", "cmd": true },
+  { "t": 9.4, "type": "type", "text": "shoe" },
+  { "t": 10.4, "type": "key", "name": "Escape" },
+  { "t": 11.4, "type": "key", "name": ",", "cmd": true },
+  { "t": 12.4, "type": "tap", "key": "theme-segments/segment1" },
+  { "t": 13.4, "type": "key", "name": "Escape" },
+  { "t": 14.0, "type": "mark", "name": "end" }
+]
