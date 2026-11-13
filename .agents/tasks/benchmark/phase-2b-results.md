@@ -1,6 +1,6 @@
 # Phase 2b: Persist benchmark results in the repo
 
-**Status:** ready to implement (requires Phase 1 and Phase 2 landed)
+**Status:** in progress — runner JSON, results tool, recipes and scripts written on branch `feat/phase-2b-results`; tests green; verification pending
 **Goal:** every benchmark run can be saved as a machine-readable record under `benchmarks/results/`, and any run can be compared against a previous one, failing loudly on regressions. No benchmark code changes behaviour; `just bench` output stays byte-for-byte the same.
 **Commit:** one commit.
 
