@@ -1,6 +1,7 @@
 //! Instrumented frame benchmarks, in the style of Rune's `pinch_bench` example. Built only
 //! with the `bench` feature (which turns on Rune's `frame-profile` phase clocks and pulls in
-//! `procwatch`'s counting allocator), and driven by `examples/frame_bench.rs` via `just bench`.
+//! `procwatch`'s counting allocator), and driven by `benchmarks/runners/frame_bench.rs` via
+//! `just bench`.
 //!
 //! The scenarios live in `benchmarks/cases/`, one file per case, compiled in through the
 //! `#[path]` module at the bottom so `Chat` stays private. Everything runs headless and

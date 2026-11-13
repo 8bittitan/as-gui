@@ -82,4 +82,5 @@ tray-icon = { version = "0.26", default-features = false }
 
 [[example]]
 name = "frame_bench"
+path = "benchmarks/runners/frame_bench.rs"
 required-features = ["bench"]
