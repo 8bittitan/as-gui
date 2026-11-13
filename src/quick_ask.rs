@@ -4,12 +4,12 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use crate::satellite::{self, Fit, icons, typography};
 use rune::{
     AppHandle, Cx, El, Key, KeyEvent, ScrollSpec, TextEdit, Tx, Waker, col, el, icon, row, spacer,
     text, text_input,
 };
 use rune_kit::{IconButton, IconButtonVariant, Markdown, Spinner};
-use rune_theme_opencode::icons;
 use tracing::warn;
 
 use crate::agent::{AgentSnapshot, ChatMessage, Role, StreamEvent, spawn_stream};
@@ -375,12 +375,13 @@ pub fn view(s: &QuickAsk, cx: &mut Cx<QuickAsk>) -> El {
     };
     let themed = crate::shell::kit_for(theme, accent, cx.system_dark());
     let k = &themed;
+    crate::satellite::install(k, cx);
     let has_exchange = !s.messages.is_empty();
     let mut header = row()
         .key("qa-header")
         .w_full()
-        .px(14.0)
-        .py(10.0)
+        .px(16.0)
+        .py(12.0)
         .gap(8.0)
         .center_y()
         .child(crate::shell::letter_chip(&agent_name, k, 18.0))
@@ -405,10 +406,10 @@ pub fn view(s: &QuickAsk, cx: &mut Cx<QuickAsk>) -> El {
     let mut panel = col()
         .key("quick-ask")
         .w_full()
-        .radius(14.0)
-        .clip_rounded(14.0)
+        .radius(satellite::RADIUS_MODAL)
+        .clip_rounded(satellite::RADIUS_MODAL)
         .fill(k.c.bg_base)
-        .border(1.0, k.c.border_muted)
+        .border(1.0, k.c.border_base)
         .child(header);
     if has_exchange {
         panel = panel
@@ -419,7 +420,7 @@ pub fn view(s: &QuickAsk, cx: &mut Cx<QuickAsk>) -> El {
     if let Some(quote) = &s.quote {
         panel = panel.child(quote_block(k, quote));
     }
-    let field = text_input(&s.composer, k.ty.ui)
+    let field = text_input(&s.composer, typography::BODY)
         .key("qa-field")
         .grow(1.0)
         .color(k.c.text_base)
@@ -429,7 +430,7 @@ pub fn view(s: &QuickAsk, cx: &mut Cx<QuickAsk>) -> El {
                 (true, true) => "Ask about it, or press Return to explain it",
                 (true, false) => "Ask anything…",
             },
-            k.c.text_faint,
+            k.c.text_muted,
         )
         .label("Quick ask")
         .on_edit(|s: &mut QuickAsk| &mut s.composer)
@@ -445,8 +446,8 @@ pub fn view(s: &QuickAsk, cx: &mut Cx<QuickAsk>) -> El {
         row()
             .key("qa-composer")
             .w_full()
-            .px(14.0)
-            .py(10.0)
+            .px(16.0)
+            .py(12.0)
             .gap(8.0)
             .center_y()
             .child(field)
@@ -456,7 +457,7 @@ pub fn view(s: &QuickAsk, cx: &mut Cx<QuickAsk>) -> El {
                     .label("Ask")
                     .disabled(s.pending || !agent_known)
                     .on_press_tx(ask)
-                    .build(k)
+                    .sized(k, satellite::Size::Medium)
                     .key("qa-send"),
             ),
     );
@@ -476,32 +477,35 @@ fn quote_block(k: &rune_kit::Kit, quote: &Quote) -> El {
     };
     let mut head = row()
         .w_full()
-        .gap(6.0)
+        .gap(4.0)
         .center_y()
-        .child(icon(&icons::OUTLINE_QUOTE, 12.0).color(k.c.text_muted))
-        .child(text(origin).font(k.ty.small).color(k.c.text_muted));
+        .child(icon(&icons::QUOTE, 12.0).color(k.c.text_muted))
+        .child(text(origin).font(typography::CAPTION).color(k.c.text_muted));
     if quote.trimmed {
-        head = head.child(text("(trimmed)").font(k.ty.small).color(k.c.text_faint));
+        head = head.child(
+            text("(trimmed)")
+                .font(typography::CAPTION)
+                .color(k.c.text_faint),
+        );
     }
     head = head.child(spacer()).child(
-        IconButton::new(&icons::CLOSE_SMALL)
-            .control_size(rune_kit::ControlSize::Small)
+        IconButton::new(&icons::X)
             .variant(IconButtonVariant::GhostMuted)
             .label("Remove quote")
             .help("Remove quote")
             .on_press_tx(remove_quote)
-            .build(k)
+            .sized(k, satellite::Size::Small)
             .key("qa-quote-remove"),
     );
-    col().key("qa-quote").w_full().px(14.0).pt(10.0).child(
+    col().key("qa-quote").w_full().px(16.0).pt(12.0).child(
         col()
             .w_full()
-            .px(10.0)
-            .py(6.0)
-            .gap(2.0)
-            .radius(8.0)
+            .pl(12.0)
+            .pr(4.0)
+            .py(4.0)
+            .radius(satellite::RADIUS_CONTROL)
             .fill(k.c.layer_02)
-            .border(1.0, k.c.border_muted)
+            .border(1.0, k.c.border_base)
             .child(head)
             .child(
                 text(preview(&quote.text))
@@ -537,15 +541,13 @@ fn preview(text: &str) -> String {
 
 /// One press asks a canned question about the quote.
 fn chips(k: &rune_kit::Kit, disabled: bool) -> El {
-    let mut chips = row().key("qa-chips").w_full().px(14.0).pb(10.0).gap(6.0);
+    let mut chips = row().key("qa-chips").w_full().px(16.0).pb(12.0).gap(8.0);
     for (key, label, instruction) in CHIPS {
         chips = chips.child(
-            rune_kit::Button::new(label)
-                .variant(rune_kit::ButtonVariant::Outline)
-                .control_size(rune_kit::ControlSize::Small)
+            satellite::button(label)
                 .disabled(disabled)
                 .on_press_tx(move |s: &mut QuickAsk, tx: &mut Tx| ask_with(s, instruction, tx))
-                .build(k)
+                .sized(k, satellite::Size::Small)
                 .key(format!("qa-chip-{key}")),
         );
     }
@@ -556,28 +558,33 @@ fn chips(k: &rune_kit::Kit, disabled: bool) -> El {
 fn application_chip(k: &rune_kit::Kit, name: &str, colour: AppColour) -> El {
     row()
         .key("qa-application")
-        .gap(6.0)
+        .gap(4.0)
+        .h(24.0)
         .px(8.0)
-        .py(3.0)
-        .radius(10.0)
+        .radius(satellite::RADIUS_CONTROL)
         .fill(k.c.layer_02)
+        .border(1.0, k.c.border_base)
         .center_y()
         .shrink()
         .min_w(0.0)
         .child(crate::shell::colour_dot(colour, k, 8.0))
-        .child(text(name).font(k.ty.small).color(k.c.text_muted).truncate())
+        .child(
+            text(name)
+                .font(typography::CAPTION)
+                .color(k.c.std_text)
+                .truncate(),
+        )
 }
 
 fn divider(k: &rune_kit::Kit) -> El {
-    el().h(1.0).w_full().fill(k.c.border_muted)
+    el().h(1.0).w_full().fill(k.c.border_base)
 }
 
 /// Opens the exchange in the main window; there once there's something to open, live once the
 /// reply has settled.
 fn promote_button(s: &QuickAsk, k: &rune_kit::Kit) -> El {
     let ready = !s.pending && s.messages.len() >= 2;
-    let mut promote = IconButton::new(&icons::OUTLINE_EXPAND)
-        .control_size(rune_kit::ControlSize::Small)
+    let mut promote = IconButton::new(&icons::MAXIMIZE)
         .variant(IconButtonVariant::GhostMuted)
         .label("Open in as-gui")
         .help("Open in as-gui");
@@ -586,7 +593,7 @@ fn promote_button(s: &QuickAsk, k: &rune_kit::Kit) -> El {
     } else {
         promote.disabled(true)
     };
-    promote.build(k).key("qa-promote")
+    promote.sized(k, satellite::Size::Small).key("qa-promote")
 }
 
 /// The question, then the reply as markdown (a single "Thinking…" until its first words),
@@ -596,8 +603,8 @@ fn transcript(s: &QuickAsk, k: &rune_kit::Kit) -> El {
         .key("qa-transcript")
         .w_full()
         .max_h(320.0)
-        .padding(14.0)
-        .gap(12.0)
+        .padding(16.0)
+        .gap(24.0)
         .scroll(ScrollSpec { stick_bottom: true });
     for m in s
         .messages
@@ -609,7 +616,11 @@ fn transcript(s: &QuickAsk, k: &rune_kit::Kit) -> El {
                 .key(format!("qa-{}", m.id))
                 .w_full()
                 .child(spacer())
-                .child(question_bubble(k, m, s.asked_about.get(&m.id))),
+                .child(row().w_frac(0.7).child(spacer()).child(question_bubble(
+                    k,
+                    m,
+                    s.asked_about.get(&m.id),
+                ))),
             Role::Assistant if m.streaming && m.text.is_empty() => row()
                 .key("qa-thinking")
                 .gap(8.0)
@@ -618,6 +629,7 @@ fn transcript(s: &QuickAsk, k: &rune_kit::Kit) -> El {
                 .child(text("Thinking…").color(k.c.text_muted)),
             Role::Assistant => col().key("qa-reply").w_full().min_w(0.0).child(
                 Markdown::new(m.text.clone())
+                    .style(crate::satellite::markdown(k))
                     .streaming(m.streaming)
                     .selectable(true)
                     .build(k),
@@ -634,32 +646,31 @@ fn transcript(s: &QuickAsk, k: &rune_kit::Kit) -> El {
 /// beneath it.
 fn question_bubble(k: &rune_kit::Kit, m: &ChatMessage, asked: Option<&(String, Quote)>) -> El {
     let bubble = col()
-        .max_w(340.0)
-        .padding(8.0)
-        .px(12.0)
+        .shrink()
+        .min_w(0.0)
+        .padding(12.0)
         .gap(4.0)
-        .radius(10.0)
+        .radius(satellite::RADIUS_CARD)
         .fill(k.c.layer_02);
+    let body = |t: &str| text(t).wrap().font(typography::BODY).color(k.c.text_base);
     let Some((instruction, quote)) = asked else {
-        return bubble.child(text(&m.text).wrap().color(k.c.text_base));
+        return bubble.child(body(&m.text));
     };
-    bubble
-        .child(text(instruction).wrap().color(k.c.text_base))
-        .child(
-            row()
-                .key(format!("qa-{}-quote", m.id))
-                .gap(6.0)
-                .center_y()
-                .min_w(0.0)
-                .child(icon(&icons::OUTLINE_QUOTE, 12.0).color(k.c.text_muted))
-                .child(
-                    text(quote.text.lines().next().unwrap_or_default())
-                        .font(k.ty.small)
-                        .color(k.c.text_muted)
-                        .truncate()
-                        .min_w(0.0),
-                ),
-        )
+    bubble.child(body(instruction)).child(
+        row()
+            .key(format!("qa-{}-quote", m.id))
+            .gap(4.0)
+            .center_y()
+            .min_w(0.0)
+            .child(icon(&icons::QUOTE, 12.0).color(k.c.text_muted))
+            .child(
+                text(quote.text.lines().next().unwrap_or_default())
+                    .font(typography::CAPTION)
+                    .color(k.c.text_muted)
+                    .truncate()
+                    .min_w(0.0),
+            ),
+    )
 }
 
 /// A failed ask: an icon and the error as the API gave it, on the danger tint.
@@ -668,16 +679,16 @@ fn error_callout(k: &rune_kit::Kit, error: &str) -> El {
         .key("qa-error")
         .role("alert")
         .w_full()
-        .padding(10.0)
+        .padding(12.0)
         .gap(8.0)
-        .radius(8.0)
+        .radius(satellite::RADIUS_CONTROL)
         .fill(k.c.danger.bg)
         .border(1.0, k.c.danger.border)
-        .child(icon(&icons::CIRCLE_EXCLAMATION, 14.0).color(k.c.danger.icon))
+        .child(icon(&icons::CIRCLE_ALERT, 16.0).color(k.c.danger.icon))
         .child(
             text(error)
                 .wrap()
-                .font(k.ty.ui_compact)
+                .font(typography::BODY)
                 .color(k.c.danger.fg)
                 .grow(1.0)
                 .min_w(0.0),
@@ -691,8 +702,8 @@ fn footer(k: &rune_kit::Kit) -> El {
         .role("button")
         .label("Powered by Algolia")
         .w_full()
-        .px(14.0)
-        .py(9.0)
+        .px(16.0)
+        .py(8.0)
         .gap(8.0)
         .center_y()
         .fill(k.c.bg_deep)
@@ -703,7 +714,11 @@ fn footer(k: &rune_kit::Kit) -> El {
             }
         })
         .child(spacer())
-        .child(text("Powered by").font(k.ty.small).color(k.c.text_muted))
+        .child(
+            text("Powered by")
+                .font(typography::CAPTION)
+                .color(k.c.text_muted),
+        )
         .child(logo())
 }
 

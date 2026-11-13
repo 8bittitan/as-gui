@@ -47,7 +47,7 @@ The Rust version is pinned in both `rust-toolchain.toml` and `mise.toml`. Change
 
 ### Updating Rune
 
-The five Rune crates (`rune`, `rune-kit`, `rune-theme-opencode`, `rune-knobs`, `rune-notify`) are git dependencies pinned to one revision. Change `rev` in `Cargo.toml` on all five together. The `wgpu` version must also match the one Rune uses.
+The four Rune crates (`rune`, `rune-kit`, `rune-knobs`, `rune-notify`) are git dependencies pinned to one revision. Change `rev` in `Cargo.toml` on all four together. The theme is not a Rune crate. It is Satellite, built in `src/satellite.rs`. The `wgpu` version must also match the one Rune uses.
 
 ## Checking the UI without a window
 

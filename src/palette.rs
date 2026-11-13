@@ -2,7 +2,9 @@
 //! at a glance. Independent of the accent, which is the app's personality, so the tones sit
 //! beside the accent's rather than on them.
 
-use rune::{Color, color};
+use rune::Color;
+
+use crate::satellite::{Hue, Planet, grey};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum AppColour {
@@ -92,37 +94,32 @@ impl AppColour {
         }
     }
 
-    /// The fill for a dot or the window's top bar, tuned to stand out on each theme's
-    /// background.
-    pub fn hex(self, dark: bool) -> &'static str {
-        match (self, dark) {
-            (AppColour::Blue, true) => "#4aa3ff",
-            (AppColour::Blue, false) => "#1f6fe0",
-            (AppColour::Orange, true) => "#ff9a3d",
-            (AppColour::Orange, false) => "#d9670b",
-            (AppColour::Green, true) => "#3fcf73",
-            (AppColour::Green, false) => "#1b9a47",
-            (AppColour::Purple, true) => "#b884ff",
-            (AppColour::Purple, false) => "#8448d6",
-            (AppColour::Red, true) => "#ff5f57",
-            (AppColour::Red, false) => "#d63a31",
-            (AppColour::Teal, true) => "#40d0c8",
-            (AppColour::Teal, false) => "#0e968f",
-            (AppColour::Yellow, true) => "#ffd43b",
-            (AppColour::Yellow, false) => "#c49200",
-            (AppColour::Pink, true) => "#ff70b0",
-            (AppColour::Pink, false) => "#d6448a",
-            (AppColour::Indigo, true) => "#8586ff",
-            (AppColour::Indigo, false) => "#5352d4",
-            (AppColour::Graphite, true) => "#a5a5ad",
-            (AppColour::Graphite, false) => "#6b6b73",
-            (AppColour::Neutral, true) => "#8e8e93",
-            (AppColour::Neutral, false) => "#8e8e93",
-        }
-    }
-
+    /// The fill for a dot or the window's top bar: Satellite's 700 step on light, its 400 on
+    /// dark, so each stands off the page in both. Blue's 700 and the brand planets are too
+    /// pale for light, so blue takes its 800 and the planets are deepened toward grey 900.
+    /// Steps an accent tone already uses move one along, so a dot never matches the accent.
     pub fn color(self, dark: bool) -> Color {
-        color::hex(self.hex(dark)).expect("application colour hexes parse")
+        let step = if dark { 400 } else { 700 };
+        let planet = |p: Planet, dark_step| {
+            if dark {
+                p.at(dark_step)
+            } else {
+                p.at(1).mix(grey(900), 0.35)
+            }
+        };
+        match self {
+            AppColour::Blue => Hue::Blue.at(if dark { 400 } else { 800 }),
+            AppColour::Orange => Hue::Orange.at(if dark { 500 } else { 700 }),
+            AppColour::Green => Hue::Green.at(if dark { 500 } else { 700 }),
+            AppColour::Purple => Hue::Purple.at(step),
+            AppColour::Red => Hue::Red.at(step),
+            AppColour::Pink => Hue::Pink.at(if dark { 400 } else { 600 }),
+            AppColour::Indigo => Hue::Nebula.at(step),
+            AppColour::Graphite => Hue::Grey.at(if dark { 400 } else { 500 }),
+            AppColour::Teal => planet(Planet::Jupiter, 2),
+            AppColour::Yellow => planet(Planet::Saturn, 4),
+            AppColour::Neutral => grey(500),
+        }
     }
 }
 
@@ -162,14 +159,48 @@ mod tests {
     }
 
     #[test]
+    fn every_assignable_colour_stands_off_the_page_in_both_appearances() {
+        for dark in [true, false] {
+            let k = crate::satellite::kit(dark, crate::chat::Accent::Blue);
+            for colour in AppColour::ALL {
+                for (name, bg) in [("bg_base", k.c.bg_base), ("bg_deep", k.c.bg_deep)] {
+                    let ratio = crate::satellite::contrast(colour.color(dark), bg);
+                    assert!(
+                        ratio >= 3.0,
+                        "{colour:?} on {name} (dark {dark}) is {ratio:.2}:1"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_two_assignable_colours_are_the_same() {
+        for dark in [true, false] {
+            for (i, a) in AppColour::ALL.into_iter().enumerate() {
+                for b in AppColour::ALL.into_iter().skip(i + 1) {
+                    assert_ne!(
+                        a.color(dark),
+                        b.color(dark),
+                        "{a:?} and {b:?} (dark {dark})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn no_colour_repeats_an_accent_tone_exactly() {
-        let accents = [
-            "#0a84ff", "#0071e3", "#bf5af2", "#9d3fdb", "#ff375f", "#e02d58", "#ff9f0a", "#c77700",
-            "#30d158", "#23a144", "#98989d", "#7c7c82",
-        ];
-        for colour in AppColour::ALL {
+        for accent in crate::chat::Accent::ALL {
             for dark in [true, false] {
-                assert!(!accents.contains(&colour.hex(dark)), "{colour:?}");
+                let tones = crate::satellite::tones(accent, dark);
+                for colour in AppColour::ALL {
+                    let c = colour.color(dark);
+                    assert!(
+                        c != tones.fill && c != tones.ink,
+                        "{colour:?} repeats {accent:?}"
+                    );
+                }
             }
         }
     }

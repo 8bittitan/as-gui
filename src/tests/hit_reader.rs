@@ -1,7 +1,7 @@
 use super::*;
 
 fn long_hit_chat() -> Runtime<Chat> {
-    let mut rt = test_chat();
+    let mut rt = test_chat_sized((720.0, 900.0));
     rt.update(|s, _| {
         crate::scenes::tools(s);
         let body = (0..40)

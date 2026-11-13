@@ -274,19 +274,32 @@ fn show_results(rt: &mut Runtime<Chat>) {
 fn a_tool_call_with_a_query_offers_search_it_yourself_under_its_row() {
     let (mut rt, id) = searched_chat("search_tool", SEARCH_INPUT);
     let key = format!("search-yourself-{id}-0");
-    assert!(rt.find(&key).is_none(), "the collapsed group hides it");
-    rt.update(|s, _| s.toggle_tools_open(&id));
-    rt.frame(1.0 / 60.0);
-    assert!(rt.find(&key).is_some());
+    assert!(rt.find(&key).is_some(), "the card's header offers it");
     tap(&mut rt, &key);
     assert!(rt.state.search.open);
     assert!(rt.find("search-panel").is_some());
 }
 
 #[test]
+fn search_it_yourself_in_a_steps_header_does_not_toggle_the_step() {
+    let (mut rt, id) = searched_chat("search_tool", SEARCH_INPUT);
+    rt.frame(1.0 / 60.0);
+    let open = |rt: &Runtime<Chat>| {
+        rt.state.sessions[rt.state.current]
+            .messages
+            .iter()
+            .find(|m| m.id == id)
+            .map(|m| m.tools[0].open)
+    };
+    let before = open(&rt);
+    tap(&mut rt, &format!("search-yourself-{id}-0"));
+    assert!(rt.state.search.open, "the panel opens");
+    assert_eq!(open(&rt), before, "the step stays as it was");
+}
+
+#[test]
 fn a_tool_call_without_a_query_offers_no_search() {
     let (mut rt, id) = searched_chat("other_tool", r#"{"foo":1}"#);
-    rt.update(|s, _| s.toggle_tools_open(&id));
     rt.frame(1.0 / 60.0);
     assert!(rt.find("tool-other_tool").is_some());
     assert!(rt.find(&format!("search-yourself-{id}-0")).is_none());
@@ -371,7 +384,12 @@ fn results_show_rank_and_mark_what_the_agent_saw() {
     assert!(rt.find("search-skeleton").is_none());
     assert!(rt.find("search-hit-1").is_some());
     assert!(rt.find("search-hit-2").is_some());
-    assert!(shows_text(&rt, "#1", "search-hit-1"));
+    assert!(
+        rt.elements()
+            .iter()
+            .any(|e| e.path.contains("search-hit-1") && e.text.as_deref() == Some("1")),
+        "the rank, as the chat's result rows show it"
+    );
     assert!(
         rt.find("search-saw-1").is_some(),
         "a1 was in the agent's result"
@@ -441,4 +459,74 @@ fn the_close_button_and_escape_close_the_panel() {
     });
     rt.frame(1.0 / 60.0);
     assert!(!rt.state.search.open);
+}
+
+#[test]
+fn the_panels_fields_are_labelled() {
+    let rt = open_panel_chat();
+    assert!(shows_text(&rt, "Index", "search-index-field"));
+    assert!(shows_text(&rt, "Query", "search-query-field"));
+}
+
+#[test]
+fn params_left_out_show_as_tags_under_the_query() {
+    let rt = open_panel_chat();
+    assert!(shows_text(&rt, "facet_lang", "search-not-sent-facet_lang"));
+    assert!(shows_text(&rt, "Not sent", "search-not-sent"));
+}
+
+#[test]
+fn before_a_run_the_panel_shows_an_empty_state() {
+    let rt = open_panel_chat();
+    assert!(shows_text(&rt, "Run the search", "search-empty"));
+}
+
+#[test]
+fn results_are_one_list_of_rows_with_plain_excerpts_and_an_agent_saw_tag() {
+    let mut rt = open_panel_chat();
+    show_results(&mut rt);
+    let rect = |key: &str| rt.presented(key).map(|(r, _)| r).expect(key);
+    let list = rect("search-results-list");
+    let first = rect("search-hit-1");
+    let second = rect("search-hit-2");
+    assert!(first[1] >= list[1] - 0.5 && second[1] + second[3] <= list[1] + list[3] + 0.5);
+    assert!(
+        second[1] >= first[1] + first[3] - 0.5,
+        "rows stack in one card"
+    );
+    assert!(first[3] < 130.0, "a row sizes to its content: {}", first[3]);
+    assert!(shows_text(&rt, "one", "search-hit-1"), "the excerpt");
+    assert!(shows_text(&rt, "Agent saw", "search-saw-1"));
+}
+
+#[test]
+fn run_sits_on_its_own_row_under_full_width_fields() {
+    let rt = open_panel_chat();
+    let rect = |key: &str| rt.presented(key).map(|(r, _)| r).expect(key);
+    let index = rect("search-index-field");
+    let query = rect("search-query-field");
+    let run = rect("search-run");
+    assert!(
+        (index[2] - query[2]).abs() < 0.5,
+        "the index and query fields are equally wide"
+    );
+    assert!(
+        run[1] >= query[1] + query[3] - 0.5,
+        "Run sits below the query"
+    );
+}
+
+#[test]
+fn params_left_out_are_listed_one_per_line() {
+    let mut rt = open_panel_chat();
+    rt.update(|s, _| s.search.not_sent = vec!["facet_brand".into(), "facet_lang".into()]);
+    settle(&mut rt);
+    let rect = |key: &str| rt.presented(key).map(|(r, _)| r).expect(key);
+    let brand = rect("search-not-sent-facet_brand");
+    let lang = rect("search-not-sent-facet_lang");
+    assert!(
+        lang[1] >= brand[1] + brand[3] - 0.5,
+        "each param gets its own line: {brand:?} {lang:?}"
+    );
+    assert!((lang[0] - brand[0]).abs() < 0.5, "the items line up");
 }

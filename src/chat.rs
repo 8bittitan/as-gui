@@ -79,6 +79,8 @@ pub struct Chat {
     registrations: BTreeMap<Action, Registration>,
     /// The search hit open in the reader: its tool's name and its index in that tool's hits.
     pub reader: Option<(String, usize)>,
+    /// The tool calls whose search results list every hit: (message id, tool index).
+    hits_expanded: std::collections::HashSet<(String, usize)>,
     /// The "search it yourself" panel beside the chat.
     pub search: SearchPanel,
     pub index_search: Arc<dyn IndexSearch>,
@@ -167,6 +169,7 @@ impl Chat {
             status_item: None,
             registrations: BTreeMap::new(),
             reader: None,
+            hits_expanded: Default::default(),
             search: SearchPanel::default(),
             index_search: Arc::new(crate::agent::AutoSearch),
             selection: Arc::new(crate::selection::NoSelection),

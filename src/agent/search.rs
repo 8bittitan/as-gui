@@ -44,6 +44,76 @@ impl SearchHit {
     }
 }
 
+impl SearchHit {
+    /// The snippet's prose on one line, for a result row: markdown markup stripped, links
+    /// read as their text, and headings left out when there is prose besides (a snippet's
+    /// headings are metadata such as "Updated for …").
+    pub fn excerpt(&self) -> String {
+        let Some(md) = &self.snippet else {
+            return String::new();
+        };
+        let lines: Vec<(bool, &str)> = md
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with("```"))
+            .map(|l| match l.trim_start_matches('#') {
+                rest if rest.len() < l.len() && rest.starts_with(' ') => (true, rest),
+                _ => (false, l),
+            })
+            .collect();
+        let prose = lines.iter().any(|(heading, _)| !heading);
+        let text = lines
+            .iter()
+            .filter(|(heading, _)| !prose || !heading)
+            .map(|(_, l)| strip_list_marker(l))
+            .collect::<Vec<_>>()
+            .join(" ");
+        strip_inline(&text)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+fn strip_list_marker(line: &str) -> &str {
+    let line = line.trim_start_matches('>').trim_start();
+    for marker in ["- ", "* ", "+ "] {
+        if let Some(rest) = line.strip_prefix(marker) {
+            return rest;
+        }
+    }
+    let digits = line.chars().take_while(char::is_ascii_digit).count();
+    match line[digits..].strip_prefix(". ") {
+        Some(rest) if digits > 0 => rest,
+        _ => line,
+    }
+}
+
+/// Inline markdown to its text: `[text](url)` and `![alt](url)` to their text, and emphasis,
+/// strong and code marks dropped. An underscore inside a word stays.
+fn strip_inline(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let word = |j: Option<&char>| j.is_some_and(|c| c.is_alphanumeric());
+        match c {
+            '!' if chars.get(i + 1) == Some(&'[') => {}
+            '[' => {}
+            ']' if chars.get(i + 1) == Some(&'(') => {
+                let close = chars[i..].iter().position(|&c| c == ')');
+                i += close.unwrap_or(0);
+            }
+            '*' | '`' | '~' => {}
+            '_' if !(i > 0 && word(chars.get(i - 1)) && word(chars.get(i + 1))) => {}
+            _ => out.push(c),
+        }
+        i += 1;
+    }
+    out
+}
+
 /// The keys of the hits the agent showed, to mark them in a search of our own.
 pub fn agent_saw(shown: &[SearchHit]) -> std::collections::HashSet<String> {
     shown.iter().map(SearchHit::key).collect()
@@ -454,6 +524,44 @@ mod tests {
             SearchHit::from_json(r#"{ "hits": [] }"#),
             None,
             "no hits, no cards"
+        );
+    }
+
+    #[test]
+    fn an_excerpt_is_the_snippets_prose_without_markup() {
+        let hit = |md: &str| SearchHit {
+            object_id: None,
+            title: "t".into(),
+            url: None,
+            snippet: Some(md.into()),
+        };
+        assert_eq!(
+            hit("###### *Updated for the 2026 season*\n\nThe current best **shoe and insole** pairings.\n\n- W = Wide\n- XW = Extra wide").excerpt(),
+            "The current best shoe and insole pairings. W = Wide XW = Extra wide",
+            "headings are metadata; emphasis and list markers go"
+        );
+        assert_eq!(
+            hit("Full sheet: [the sizing sheet](https://example.com/sizing) and `code`").excerpt(),
+            "Full sheet: the sizing sheet and code",
+            "a link reads as its text"
+        );
+        assert_eq!(
+            hit("snake_case_name stays, _this_ goes").excerpt(),
+            "snake_case_name stays, this goes",
+            "underscores inside words are not emphasis"
+        );
+        assert_eq!(
+            hit("## Only a heading").excerpt(),
+            "Only a heading",
+            "a lone heading is kept"
+        );
+        assert_eq!(
+            SearchHit {
+                snippet: None,
+                ..hit("")
+            }
+            .excerpt(),
+            ""
         );
     }
 }

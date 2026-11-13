@@ -4,17 +4,16 @@
 use std::collections::HashSet;
 
 use rune::TextEdit;
-use rune::{El, ScrollSpec, Tx, col, row, spacer, text, text_input};
-use rune_kit::{
-    Badge, BadgeVariant, Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant,
-    Markdown,
-};
+use rune::{El, ScrollSpec, Tx, col, el, icon, row, spacer, text, text_input};
+use rune_kit::{ButtonVariant, IconButton, IconButtonVariant};
 use serde_json::{Map, Value};
 
 use crate::agent::{QueryParams, RankedHit, SearchPage, path_segment};
 use crate::chat::Chat;
 use crate::conversation::skeleton_bar;
 use crate::loading::{Load, Phase};
+use crate::satellite::{self, Fit, icons, typography};
+use crate::shell::field_box;
 
 pub const PANEL_WIDTH: f32 = 400.0;
 
@@ -187,23 +186,17 @@ impl SearchPanel {
     }
 }
 
-/// The slide-over beside the chat: the fields on top, then results, then the footer.
+/// The side panel beside the chat: a header, the labelled fields, then the results and a
+/// footer with the totals, the pager and Copy as curl.
 pub fn panel(s: &Chat, k: &rune_kit::Kit) -> El {
     let panel = &s.search;
     let phase = panel.load.phase(s.now);
-    let mut body = col().grow(1.0).min_h(0.0).w_full();
-    body = match &phase {
-        Phase::Failed(error) => body.child(error_state(k, error)),
-        Phase::Skeleton => body.child(skeleton(k, s.now)),
+    let body = match &phase {
+        Phase::Failed(error) => error_state(k, error),
+        Phase::Skeleton => skeleton(k, s.now),
         _ => match &panel.page {
-            Some(page) => body.child(results(s, k, page)),
-            None => body.child(
-                col().w_full().padding(16.0).child(
-                    text("Run the search to see what the index returns.")
-                        .wrap()
-                        .color(k.c.text_muted),
-                ),
-            ),
+            Some(page) => results(s, k, page),
+            None => empty_state(k),
         },
     };
     let mut view = col()
@@ -212,10 +205,18 @@ pub fn panel(s: &Chat, k: &rune_kit::Kit) -> El {
         .label("Search it yourself")
         .w(PANEL_WIDTH)
         .h_full()
-        .fill(k.c.layer_01)
+        .fill(k.c.bg_base)
+        .border_sides([0.0, 0.0, 0.0, 1.0], k.c.border_base)
         .child(header(k))
         .child(fields(s, k))
-        .child(body);
+        .child(
+            col()
+                .grow(1.0)
+                .min_h(0.0)
+                .w_full()
+                .border_sides([1.0, 0.0, 0.0, 0.0], k.c.border_base)
+                .child(body),
+        );
     if let Some(page) = panel
         .page
         .as_ref()
@@ -229,25 +230,37 @@ pub fn panel(s: &Chat, k: &rune_kit::Kit) -> El {
 fn header(k: &rune_kit::Kit) -> El {
     row()
         .w_full()
-        .px(16.0)
-        .pt(12.0)
-        .pb(8.0)
+        .min_h(56.0)
+        .pl(16.0)
+        .pr(12.0)
+        .gap(8.0)
         .center_y()
+        .border_sides([0.0, 0.0, 1.0, 0.0], k.c.border_base)
         .child(
             text("Search it yourself")
-                .font(k.ty.ui_medium)
-                .color(k.c.text_base),
+                .font(typography::HEADING)
+                .color(k.c.text_base)
+                .truncate(),
         )
         .child(spacer())
         .child(
             IconButton::new(k.glyph.close)
-                .variant(IconButtonVariant::Ghost)
-                .control_size(ControlSize::Regular)
+                .variant(IconButtonVariant::GhostMuted)
                 .label("Close search")
                 .on_press(|s: &mut Chat| s.close_search())
-                .build(k)
+                .sized(k, satellite::Size::Medium)
                 .key("search-close"),
         )
+}
+
+/// A form field: its label over the control, and a hint under it when there is one.
+fn labelled(k: &rune_kit::Kit, key: &str, label: &str, control: El) -> El {
+    col()
+        .key(key)
+        .w_full()
+        .gap(4.0)
+        .child(text(label).font(k.ty.ui_medium).color(k.c.text_base))
+        .child(control)
 }
 
 fn fields(s: &Chat, k: &rune_kit::Kit) -> El {
@@ -258,7 +271,7 @@ fn fields(s: &Chat, k: &rune_kit::Kit) -> El {
         .single_line()
         .w_full()
         .color(k.c.text_base)
-        .placeholder("Index name", k.c.text_faint)
+        .placeholder("Index name", k.c.text_muted)
         .caret(k.c.text_base, k.selection())
         .label("Index")
         .on_edit(|s: &mut Chat| &mut s.search.index)
@@ -268,65 +281,141 @@ fn fields(s: &Chat, k: &rune_kit::Kit) -> El {
         .single_line()
         .w_full()
         .color(k.c.text_base)
-        .placeholder("Query", k.c.text_faint)
+        .placeholder("Query", k.c.text_muted)
         .caret(k.c.text_base, k.selection())
         .label("Query")
         .on_edit(|s: &mut Chat| &mut s.search.query)
         .on_submit(run);
     let blocked = panel.blocked();
+    let blocked_now = blocked.is_some();
+    let mut query_field = col().w_full().gap(8.0).child(field_box(k, query));
+    if !panel.not_sent.is_empty() {
+        query_field = query_field.child(not_sent(k, &panel.not_sent));
+    }
     let mut view = col()
         .w_full()
-        .px(16.0)
-        .pb(12.0)
-        .gap(8.0)
-        .child(input_box(k, index))
-        .child(
-            row()
-                .w_full()
-                .gap(8.0)
-                .center_y()
-                .child(input_box(k, query).grow(1.0).min_w(0.0))
-                .child(
-                    Button::new("Run")
-                        .variant(ButtonVariant::Submit)
-                        .disabled(blocked.is_some())
-                        .on_press(|s: &mut Chat| s.run_search())
-                        .build(k)
-                        .key("search-run"),
-                ),
-        );
-    if !panel.not_sent.is_empty() {
-        view = view.child(
-            col().key("search-not-sent").w_full().child(
-                text(format!(
-                    "Not sent (not Algolia search params): {}",
-                    panel.not_sent.join(", ")
-                ))
-                .font(k.ty.ui_compact)
-                .color(k.c.text_faint)
-                .wrap(),
-            ),
-        );
-    }
+        .padding(16.0)
+        .gap(16.0)
+        .child(labelled(
+            k,
+            "search-index-field",
+            "Index",
+            field_box(k, index),
+        ))
+        .child(labelled(k, "search-query-field", "Query", query_field));
     if let Some(reason) = blocked {
         view = view.child(
-            text(reason)
+            row()
                 .key("search-blocked")
-                .font(k.ty.ui_compact)
-                .color(k.c.warning.fg)
-                .wrap(),
+                .w_full()
+                .gap(8.0)
+                .child(
+                    icon(&icons::CIRCLE_ALERT, 14.0)
+                        .color(k.c.danger.icon)
+                        .mt(3.0),
+                )
+                .child(
+                    text(reason)
+                        .wrap()
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .font(k.ty.text_small)
+                        .color(k.c.danger.fg),
+                ),
         );
     }
-    view = view.child(
-        Button::new("Advanced")
-            .variant(ButtonVariant::GhostMuted)
-            .control_size(ControlSize::Small)
-            .expanded(panel.advanced_open)
-            .on_press(|s: &mut Chat| s.search.advanced_open = !s.search.advanced_open)
-            .build(k)
-            .key("search-advanced"),
-    );
-    if panel.advanced_open {
+    view.child(advanced(s, k)).child(
+        satellite::button("Run search")
+            .icon(&icons::SEARCH)
+            .variant(ButtonVariant::Submit)
+            .disabled(blocked_now)
+            .on_press(|s: &mut Chat| s.run_search())
+            .sized(k, satellite::Size::Medium)
+            .key("search-run")
+            .w_full(),
+    )
+}
+
+/// The call's arguments Algolia wouldn't accept, listed one per line under the query.
+fn not_sent(k: &rune_kit::Kit, keys: &[String]) -> El {
+    let mut list = col()
+        .key("search-not-sent")
+        .role("list")
+        .w_full()
+        .gap(2.0)
+        .child(
+            text("Not sent, not Algolia search params:")
+                .font(typography::CAPTION)
+                .color(k.c.text_muted),
+        );
+    for key in keys {
+        list = list.child(
+            row()
+                .key(format!("search-not-sent-{key}"))
+                .role("listitem")
+                .gap(8.0)
+                .center_y()
+                .pl(4.0)
+                .child(
+                    text("•")
+                        .font(typography::CAPTION)
+                        .color(k.c.text_muted)
+                        .a11y_hidden(),
+                )
+                .child(
+                    text(key)
+                        .font(typography::CAPTION.mono())
+                        .color(k.c.std_text),
+                ),
+        );
+    }
+    list
+}
+
+/// The search params besides the query, folded behind a disclosure row.
+fn advanced(s: &Chat, k: &rune_kit::Kit) -> El {
+    let panel = &s.search;
+    let open = panel.advanced_open;
+    let count = serde_json::from_str::<Value>(&panel.params.text)
+        .ok()
+        .and_then(|v| v.as_object().map(Map::len))
+        .unwrap_or(0);
+    let mut toggle = row()
+        .key("search-advanced")
+        .role("button")
+        .label("Search parameters")
+        .expanded(open)
+        .focusable(true)
+        .w_full()
+        .min_h(32.0)
+        .gap(8.0)
+        .center_y()
+        .on_press(|s: &mut Chat| s.search.advanced_open = !s.search.advanced_open)
+        .child(
+            icon(
+                if open {
+                    k.glyph.chevron_down
+                } else {
+                    k.glyph.caret_right
+                },
+                14.0,
+            )
+            .color(k.c.icon_muted),
+        )
+        .child(
+            text("Search parameters")
+                .font(k.ty.ui_medium)
+                .color(k.c.text_base),
+        );
+    if count > 0 {
+        toggle = toggle.child(
+            text(format!("· {count}"))
+                .font(k.ty.ui)
+                .color(k.c.text_muted),
+        );
+    }
+    let mut view = col().w_full().gap(8.0).child(toggle);
+    if open {
         let params = text_input(&panel.params, k.ty.mono)
             .key("search-params")
             .w_full()
@@ -334,38 +423,77 @@ fn fields(s: &Chat, k: &rune_kit::Kit) -> El {
             .caret(k.c.text_base, k.selection())
             .label("Search params (JSON)")
             .on_edit(|s: &mut Chat| &mut s.search.params)
-            .on_submit(run);
-        view = view.child(input_box(k, rune::auto_grow(params, 4, 10)));
+            .on_submit(|s: &mut Chat, _: &mut Tx| s.run_search());
+        view = view.child(field_box(k, rune::auto_grow(params, 4, 10)));
     }
     view
 }
 
-fn input_box(k: &rune_kit::Kit, input: El) -> El {
+/// Before the first run: what the panel is for and how to start.
+fn empty_state(k: &rune_kit::Kit) -> El {
     col()
+        .key("search-empty")
         .w_full()
-        .padding(8.0)
-        .px(10.0)
-        .radius(8.0)
-        .fill(k.c.layer_02)
-        .border(1.0, k.c.border_muted)
-        .child(input)
+        .px(24.0)
+        .py(48.0)
+        .gap(8.0)
+        .items_center()
+        .child(
+            el().size(40.0, 40.0)
+                .radius(20.0)
+                .fill(k.c.layer_02)
+                .center()
+                .child(icon(&icons::SEARCH, 18.0).color(k.c.icon_muted)),
+        )
+        .child(
+            text("Run the search")
+                .font(typography::HEADING)
+                .color(k.c.text_base)
+                .mt(4.0),
+        )
+        .child(
+            text("See what the index returns for the agent's query, then tweak it and run again.")
+                .wrap()
+                .max_w(280.0)
+                .font(k.ty.text_small)
+                .color(k.c.text_muted),
+        )
 }
 
 fn error_state(k: &rune_kit::Kit, error: &str) -> El {
     col()
         .w_full()
         .padding(16.0)
-        .gap(8.0)
+        .gap(12.0)
         .child(
-            col()
+            row()
                 .key("search-error")
                 .w_full()
-                .child(text(error).wrap().color(k.c.danger.fg)),
+                .px(12.0)
+                .py(10.0)
+                .gap(8.0)
+                .radius(satellite::RADIUS_CARD)
+                .fill(k.c.danger.bg)
+                .border(1.0, k.c.danger.border)
+                .child(
+                    icon(&icons::CIRCLE_ALERT, 14.0)
+                        .color(k.c.danger.icon)
+                        .mt(3.0),
+                )
+                .child(
+                    text(error)
+                        .wrap()
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .font(k.ty.text_small)
+                        .color(k.c.danger.fg),
+                ),
         )
         .child(
-            Button::new("Retry")
+            satellite::button("Retry")
+                .icon(&icons::ROTATE_CW)
                 .on_press(|s: &mut Chat| s.run_search())
-                .build(k)
+                .sized(k, satellite::Size::Small)
                 .key("search-retry"),
         )
 }
@@ -375,52 +503,59 @@ fn skeleton(k: &rune_kit::Kit, now: f64) -> El {
         .key("search-skeleton")
         .w_full()
         .padding(16.0)
-        .gap(12.0);
+        .gap(16.0);
     for _ in 0..3 {
         list = list.child(
             col()
                 .w_full()
-                .gap(8.0)
-                .child(skeleton_bar(k, 220.0, 14.0, now))
-                .child(skeleton_bar(k, 320.0, 12.0, now))
-                .child(skeleton_bar(k, 260.0, 12.0, now)),
+                .gap(4.0)
+                .child(skeleton_bar(k, 200.0, 16.0, now))
+                .child(skeleton_bar(k, 320.0, 16.0, now))
+                .child(skeleton_bar(k, 260.0, 16.0, now)),
         );
     }
     list
 }
 
+/// The hits as the chat lists them: one card of rows, rank, title and a two-line excerpt.
 fn results(s: &Chat, k: &rune_kit::Kit, page: &SearchPage) -> El {
-    let mut list = col()
+    let mut scroll = col()
         .key("search-results")
         .w_full()
         .grow(1.0)
         .min_h(0.0)
         .padding(16.0)
-        .pt(4.0)
-        .gap(8.0)
         .scroll(ScrollSpec {
             stick_bottom: false,
-        })
-        .role("list")
-        .label("Search results");
+        });
     if page.hits.is_empty() {
-        list = list.child(text("No hits.").color(k.c.text_muted));
+        return scroll.child(
+            text("No hits for this search.")
+                .font(k.ty.text_small)
+                .color(k.c.text_muted),
+        );
     }
-    for ranked in &page.hits {
-        list = list.child(hit_card(s, k, ranked));
+    let mut list = col()
+        .key("search-results-list")
+        .role("list")
+        .label("Search results")
+        .w_full()
+        .radius(satellite::RADIUS_CARD)
+        .fill(k.c.bg_base)
+        .border(1.0, k.c.border_base)
+        .border_layout()
+        .clip_rounded(satellite::RADIUS_CARD);
+    for (i, ranked) in page.hits.iter().enumerate() {
+        list = list.child(hit_row(s, k, ranked, i > 0));
     }
-    list
+    scroll = scroll.child(list);
+    scroll
 }
 
-fn hit_card(s: &Chat, k: &rune_kit::Kit, ranked: &RankedHit) -> El {
+fn hit_row(s: &Chat, k: &rune_kit::Kit, ranked: &RankedHit, divided: bool) -> El {
     let hit = &ranked.hit;
     let rank = ranked.rank;
-    let mut head = row().w_full().gap(8.0).center_y().child(
-        text(format!("#{rank}"))
-            .font(k.ty.ui_compact)
-            .color(k.c.text_faint),
-    );
-    head = head.child(
+    let mut title = row().w_full().gap(8.0).center_y().child(
         text(&hit.title)
             .font(k.ty.ui_medium)
             .color(k.c.text_accent)
@@ -429,92 +564,112 @@ fn hit_card(s: &Chat, k: &rune_kit::Kit, ranked: &RankedHit) -> El {
             .min_w(0.0),
     );
     if s.search.agent_saw.contains(&hit.key()) {
-        head = head.child(
-            Badge::new("agent saw this")
-                .variant(BadgeVariant::Subtle)
-                .build(k)
-                .key(format!("search-saw-{rank}")),
+        title = title.child(
+            row()
+                .key(format!("search-saw-{rank}"))
+                .h(20.0)
+                .px(6.0)
+                .center_y()
+                .radius(satellite::RADIUS_CONTROL)
+                .fill(k.c.info.bg)
+                .border(1.0, k.c.info.border)
+                .child(
+                    text("Agent saw")
+                        .font(typography::CAPTION)
+                        .color(k.c.info.fg),
+                ),
         );
     }
-    let mut card = col()
+    let excerpt = hit.excerpt();
+    let mut body = col().grow(1.0).min_w(0.0).gap(2.0).child(title);
+    if !excerpt.is_empty() {
+        body = body.child(
+            text(excerpt)
+                .font(k.ty.text_small)
+                .color(k.c.text_muted)
+                .max_lines(2),
+        );
+    }
+    let mut r = row()
         .key(format!("search-hit-{rank}"))
         .role("listitem")
         .w_full()
-        .h(s.hit_card_height().min(130.0))
-        .padding(12.0)
-        .gap(6.0)
-        .radius(10.0)
-        .fill(k.c.layer_02)
-        .border(1.0, k.c.border_muted)
-        .clip_rounded(10.0)
-        .child(head);
-    if let Some(snippet) = &hit.snippet {
-        card = card.child(
-            col()
-                .grow(1.0)
-                .min_h(0.0)
-                .min_w(0.0)
-                .child(Markdown::new(snippet.clone()).build(k)),
-        );
+        .min_w(0.0)
+        .px(12.0)
+        .py(10.0)
+        .gap(12.0)
+        .child(
+            text(format!("{rank}"))
+                .font(typography::CAPTION)
+                .color(k.c.text_muted)
+                .w(20.0)
+                .mt(2.0),
+        )
+        .child(body);
+    if divided {
+        r = r.border_sides([1.0, 0.0, 0.0, 0.0], k.c.border_muted);
     }
-    card
+    r
 }
 
 fn footer(s: &Chat, k: &rune_kit::Kit, page: &SearchPage) -> El {
     let first = page.page == 0;
     let last = page.page + 1 >= page.nb_pages;
     let curl = s.search_curl();
-    let totals = format!(
-        "{} hits · {} ms · Page {} of {}",
-        page.nb_hits,
-        page.processing_ms,
-        page.page + 1,
-        page.nb_pages.max(1)
-    );
-    col()
+    let pager = |glyph: &'static rune::Icon, label: &str, disabled: bool| {
+        IconButton::new(glyph)
+            .variant(IconButtonVariant::GhostMuted)
+            .label(label)
+            .disabled(disabled)
+    };
+    row()
         .key("search-footer")
         .w_full()
-        .padding(12.0)
+        .min_h(48.0)
         .px(16.0)
-        .gap(6.0)
-        .child(text(totals).font(k.ty.ui_compact).color(k.c.text_muted))
+        .gap(4.0)
+        .center_y()
+        .border_sides([1.0, 0.0, 0.0, 0.0], k.c.border_base)
         .child(
-            row()
-                .w_full()
-                .gap(6.0)
-                .center_y()
-                .child(
-                    Button::new("Previous")
-                        .variant(ButtonVariant::Ghost)
-                        .control_size(ControlSize::Small)
-                        .disabled(first)
-                        .on_press(move |s: &mut Chat| s.search_page(page_before(s)))
-                        .build(k)
-                        .key("search-prev"),
-                )
-                .child(
-                    Button::new("Next")
-                        .variant(ButtonVariant::Ghost)
-                        .control_size(ControlSize::Small)
-                        .disabled(last)
-                        .on_press(move |s: &mut Chat| s.search_page(page_after(s)))
-                        .build(k)
-                        .key("search-next"),
-                )
-                .child(spacer())
-                .child(
-                    Button::new("Copy as curl")
-                        .variant(ButtonVariant::Outline)
-                        .control_size(ControlSize::Small)
-                        .disabled(curl.is_none())
-                        .on_press_tx(move |_: &mut Chat, tx: &mut Tx| {
-                            if let Some(curl) = &curl {
-                                tx.copy(curl.clone());
-                            }
-                        })
-                        .build(k)
-                        .key("search-curl"),
-                ),
+            text(format!("{} hits · {} ms", page.nb_hits, page.processing_ms))
+                .font(typography::CAPTION)
+                .color(k.c.text_muted)
+                .truncate(),
+        )
+        .child(spacer())
+        .child(
+            pager(&icons::CHEVRON_LEFT, "Previous page", first)
+                .on_press(move |s: &mut Chat| s.search_page(page_before(s)))
+                .sized(k, satellite::Size::Small)
+                .key("search-prev"),
+        )
+        .child(
+            text(format!(
+                "Page {} of {}",
+                page.page + 1,
+                page.nb_pages.max(1)
+            ))
+            .font(typography::CAPTION)
+            .color(k.c.text_muted),
+        )
+        .child(
+            pager(&icons::CHEVRON_RIGHT, "Next page", last)
+                .on_press(move |s: &mut Chat| s.search_page(page_after(s)))
+                .build(k)
+                .key("search-next"),
+        )
+        .child(
+            satellite::button("Copy as curl")
+                .icon(k.glyph.copy)
+                .disabled(curl.is_none())
+                .on_press_tx(move |_: &mut Chat, tx: &mut Tx| {
+                    if let Some(curl) = &curl {
+                        tx.copy(curl.clone());
+                    }
+                })
+                .sized(k, satellite::Size::Small)
+                .key("search-curl")
+                .ml(8.0),
         )
 }
 

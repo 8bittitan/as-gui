@@ -996,6 +996,37 @@ fn a_long_chat_scrolls_clear_of_the_composer() {
 }
 
 #[test]
+fn follow_ups_are_full_width_rows_under_a_heading_with_roomy_actions() {
+    let mut rt = test_chat();
+    rt.update(|s, _| crate::scenes::tools(s));
+    settle(&mut rt);
+    let rect = |key: &str| rt.presented(key).map(|(r, _)| r).expect(key);
+    let list = rect("suggestions-a1");
+    let row = rect("suggestion-0");
+    let reply = rect("m-a1");
+    assert!(
+        (list[2] - reply[2]).abs() < 0.5 && row[2] >= list[2] - 2.5,
+        "the follow-ups span the reply's width: {list:?} {row:?} {reply:?}"
+    );
+    assert!(
+        row[3] >= 40.0,
+        "a follow-up is a 40 point row, not a small chip: {}",
+        row[3]
+    );
+    assert!(list[3] >= 3.0 * 40.0, "the follow-ups stack");
+    assert!(
+        shows_text(&rt, "Follow up", "follow-ups-a1"),
+        "the list is labelled"
+    );
+    let copy = rect("copy-a1");
+    assert!(
+        copy[3] >= 24.0,
+        "the action buttons are 24 points: {}",
+        copy[3]
+    );
+}
+
+#[test]
 fn suggestions_after_a_reply_become_quick_actions_that_send() {
     let mut rt = test_chat();
     rt.update(|s, _| s.selected_agent = Some(agent_one()));
@@ -1196,8 +1227,7 @@ fn untouched_knobs_keep_the_shipped_design_values() {
         near(fraction, 0.6) && min == 500.0 && max == 860.0,
         "comfortable width"
     );
-    assert_eq!(s.hit_card_height(), 210.0);
-    assert_eq!(s.hit_columns(), 2, "auto is two columns when comfortable");
+    assert_eq!(s.results_shown(), 3);
     assert_eq!(s.frost_blur(), 24.0);
     assert!(near(s.frost_alpha(), 0.72), "the shipped frost opacity");
     assert!(near(s.reveal_seconds(), 0.18), "the shipped word fade");
@@ -1208,11 +1238,6 @@ fn untouched_knobs_keep_the_shipped_design_values() {
     assert!(
         near(fraction, 0.8) && min == 620.0 && max == 1160.0,
         "wide width"
-    );
-    assert_eq!(
-        wide.state.hit_columns(),
-        3,
-        "auto is three columns when wide"
     );
 }
 
@@ -1244,19 +1269,12 @@ fn tool_events_build_a_collapsible_group_with_json() {
 
     let m = &rt.state.sessions[0].messages[1];
     assert_eq!(m.tools.len(), 1);
-    assert!(!m.tools_open, "the group starts collapsed");
-    assert!(
-        rt.find("tool-schedule_task_tool").is_none(),
-        "the collapsed group hides the tool's row"
-    );
     let message_id = m.id.clone();
-
-    rt.update(|s, _| s.toggle_tools_open(&message_id));
-    rt.frame(1.0 / 60.0);
     assert!(
         rt.find("tool-schedule_task_tool").is_some(),
-        "expanding the group shows the tool's row"
+        "each call shows as its own card, with no group to open first"
     );
+    assert!(rt.find("tools-header").is_none(), "no Used N tools header");
     assert!(
         rt.find("tool-json-schedule_task_tool").is_none(),
         "the input JSON is hidden while the row is collapsed"
@@ -1452,13 +1470,12 @@ fn the_playground_opens_a_scene_with_a_variant_on_its_stage() {
         .playground_state::<Chat>()
         .expect("the scene's state is on the stage");
     assert!(
-        !stage.sessions[0].messages[1].tools_open,
-        "the variant collapses the tool group"
+        stage.sessions[0].messages[1].tools.iter().all(|t| !t.open),
+        "the variant collapses every tool card"
     );
     assert!(
-        rt.playground_element("tool-algolia_search_index_products_markdown")
-            .is_none(),
-        "the collapsed group hides the tool's row on the stage"
+        rt.playground_element("hits-search_tool").is_none(),
+        "the collapsed card hides its results on the stage"
     );
 
     rt.open_playground("tools", None);
@@ -1469,11 +1486,100 @@ fn the_playground_opens_a_scene_with_a_variant_on_its_stage() {
         "reopening the scene remakes its fixture state"
     );
     assert!(
-        !stage.sessions[0].messages[1].tools_open,
+        stage.sessions[0].messages[1].tools.iter().all(|t| !t.open),
         "and the picked variant stays applied"
     );
     assert!(
         rt.state.sessions[0].messages.is_empty(),
         "the real state stays untouched throughout"
+    );
+}
+
+fn two_settled_exchanges() -> Runtime<Chat> {
+    let mut rt = test_chat_sized((900.0, 720.0));
+    rt.update(|s, _| {
+        s.selected_agent = Some(agent_one());
+        for i in 0..2 {
+            s.sessions[0]
+                .messages
+                .push(ChatMessage::user(format!("u{i}"), format!("question {i}")));
+            let mut a = ChatMessage::assistant(format!("a{i}"));
+            a.text = format!("answer {i}");
+            a.streaming = false;
+            s.sessions[0].messages.push(a);
+        }
+    });
+    settle(&mut rt);
+    rt
+}
+
+fn opacity(rt: &Runtime<Chat>, key: &str) -> f32 {
+    rt.elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some(key))
+        .unwrap_or_else(|| panic!("no {key}"))
+        .opacity
+}
+
+#[test]
+fn an_earlier_reply_shows_its_actions_on_hover_and_the_latest_always() {
+    let mut rt = two_settled_exchanges();
+    assert!(
+        opacity(&rt, "actions-a0") < 0.01,
+        "an earlier reply's actions rest hidden"
+    );
+    assert!(
+        opacity(&rt, "actions-a1") > 0.99,
+        "the latest reply's actions stay shown"
+    );
+
+    let (x, y) = rt.find("m-a0").unwrap();
+    rt.pointer_move(x, y);
+    settle(&mut rt);
+    assert!(
+        opacity(&rt, "actions-a0") > 0.99,
+        "hovering the reply shows them"
+    );
+}
+
+#[test]
+fn keyboard_focus_on_an_earlier_reply_shows_its_actions() {
+    let mut rt = two_settled_exchanges();
+    assert!(opacity(&rt, "actions-a0") < 0.01);
+    rt.update(|_, tx| tx.focus("copy-a0", true));
+    settle(&mut rt);
+    assert!(opacity(&rt, "actions-a0") > 0.99);
+}
+
+#[test]
+fn a_long_question_wraps_within_seventy_percent_of_the_thread() {
+    let mut rt = test_chat_sized((900.0, 720.0));
+    rt.update(|s, _| {
+        s.selected_agent = Some(agent_one());
+        s.sessions[0].messages.push(ChatMessage::user(
+            "u0",
+            "a long question that goes on and on, well past the width a single line of the bubble could ever hold on screen",
+        ));
+    });
+    settle(&mut rt);
+    let rect = |key: &str| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(key))
+            .unwrap_or_else(|| panic!("no {key}"))
+            .rect
+    };
+    let (thread, bubble) = (rect("thread"), rect("bubble-u0"));
+    assert!(
+        bubble[2] <= thread[2] * 0.7 + 0.5,
+        "{bubble:?} in {thread:?}"
+    );
+    assert!(
+        bubble[2] > thread[2] * 0.6,
+        "the long question fills its share"
+    );
+    assert!(
+        (bubble[0] + bubble[2] - (thread[0] + thread[2])).abs() < 0.5,
+        "it sits on the right"
     );
 }

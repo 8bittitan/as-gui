@@ -7,10 +7,16 @@ use tracing::warn;
 use super::Chat;
 
 impl Chat {
-    pub fn toggle_tools_open(&mut self, message_id: &str) {
-        if let Some(m) = self.message_mut(message_id) {
-            m.tools_open = !m.tools_open;
+    pub fn toggle_hits_expanded(&mut self, message_id: &str, index: usize) {
+        let key = (message_id.to_string(), index);
+        if !self.hits_expanded.remove(&key) {
+            self.hits_expanded.insert(key);
         }
+    }
+
+    pub fn hits_expanded(&self, message_id: &str, index: usize) -> bool {
+        self.hits_expanded
+            .contains(&(message_id.to_string(), index))
     }
 
     pub fn toggle_tool_open(&mut self, message_id: &str, index: usize) {

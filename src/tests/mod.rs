@@ -22,6 +22,7 @@ use crate::store::Persisted;
 mod accessibility;
 mod applications;
 mod ask_selection;
+mod buttons;
 mod command_bar;
 mod conversation;
 mod hit_reader;
@@ -109,8 +110,8 @@ fn playground_app() -> Runtime<Chat> {
     };
     let app = App::new(AppSpec::<Chat> {
         scenes: crate::SCENES,
-        fonts: rune_theme_opencode::FONTS,
-        families: rune_theme_opencode::FAMILIES,
+        fonts: crate::satellite::FONTS,
+        families: crate::satellite::FAMILIES,
         poll: Some(chat::poll),
         on_key: Some(crate::shell::on_key),
         ..AppSpec::new("as-gui-test", (860.0, 600.0), crate::mock_chat, view)

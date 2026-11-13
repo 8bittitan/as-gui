@@ -30,7 +30,7 @@ impl AgentDirectory for MockDirectory {
 }
 
 /// Canned reply for the mock agent, and the picker's mock agents.
-pub const MOCK_REPLY: &str = "I am the mock agent — press ⌘, to connect your Algolia credentials, or restart with `AS_GUI_MOCK=1` removed to pick an Agent Studio agent.\n\nMeanwhile, markdown works:\n\n```rust\nlet k = rune_theme_opencode::kit(cx.system_dark());\nlet button = Button::new(\"Send\").build(k);\n```\n\n- Responses stream in as they arrive\n- The composer submits on Enter";
+pub const MOCK_REPLY: &str = "I am the mock agent — press ⌘, to connect your Algolia credentials, or restart with `AS_GUI_MOCK=1` removed to pick an Agent Studio agent.\n\nMeanwhile, markdown works:\n\n```rust\nlet k = satellite::kit(cx.system_dark(), Accent::Blue);\nlet button = Button::new(\"Send\").build(k);\n```\n\n- Responses stream in as they arrive\n- The composer submits on Enter";
 
 /// The demo tool calls the mock streams, so the tool-call UI has an example to show.
 pub fn mock_tools() -> Vec<ToolCall> {

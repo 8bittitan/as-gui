@@ -3,40 +3,19 @@ use super::*;
 
 #[test]
 #[cfg(feature = "knobs")]
-fn a_hit_card_height_knob_resizes_the_rendered_cards() {
+fn a_results_shown_knob_sets_how_many_hits_list_before_show_all() {
     let mut rt = test_chat();
     rt.update(|s, _| crate::scenes::tools(s));
     rt.frame(1.0 / 60.0);
-    let height = |rt: &Runtime<Chat>| rt.presented("hit-search_tool-0").map(|(r, _)| r[3]);
-    assert_eq!(height(&rt), Some(210.0), "the shipped card height");
+    assert!(rt.find("hit-search_tool-3").is_none(), "three by default");
 
-    rt.update(|s, _| s.knobs.set(&knobs::HIT_CARD_HEIGHT, 320.0));
-    settle(&mut rt);
+    rt.update(|s, _| s.knobs.set(&knobs::RESULTS_SHOWN, 4.0));
+    rt.frame(1.0 / 60.0);
     assert!(
-        height(&rt).is_some_and(|h| (h - 320.0).abs() < 0.5),
-        "the knob retunes the cards live"
+        rt.find("hit-search_tool-3").is_some(),
+        "the knob lists one more"
     );
-}
-
-#[test]
-#[cfg(feature = "knobs")]
-fn a_columns_knob_overrides_the_width_setting() {
-    let mut rt = test_chat();
-    assert_eq!(rt.state.hit_columns(), 2);
-    rt.update(|s, _| s.knobs.set(&knobs::HIT_COLUMNS, 4.0));
-    assert_eq!(
-        rt.state.hit_columns(),
-        4,
-        "the fifth choice is four columns"
-    );
-    rt.update(|s, _| s.knobs.set(&knobs::HIT_COLUMNS, 1.0));
-    assert_eq!(rt.state.hit_columns(), 1);
-    rt.update(|s, _| s.knobs.set(&knobs::HIT_COLUMNS, 0.0));
-    assert_eq!(
-        rt.state.hit_columns(),
-        2,
-        "Auto follows the width setting again"
-    );
+    assert!(rt.find("hit-search_tool-4").is_none());
 }
 
 #[test]

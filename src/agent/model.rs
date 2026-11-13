@@ -16,7 +16,6 @@ pub struct ChatMessage {
     pub role: Role,
     pub text: String,
     pub tools: Vec<ToolCall>,
-    pub tools_open: bool,
     /// Seconds the turn spent "thinking", recorded when the stream settles.
     pub thought: Option<f64>,
     pub streaming: bool,
@@ -155,7 +154,6 @@ impl ChatMessage {
             role: Role::User,
             text: text.into(),
             tools: Vec::new(),
-            tools_open: false,
             thought: None,
             streaming: false,
             vote: None,
@@ -170,7 +168,6 @@ impl ChatMessage {
             role: Role::Assistant,
             text: String::new(),
             tools: Vec::new(),
-            tools_open: false,
             thought: None,
             streaming: true,
             vote: None,

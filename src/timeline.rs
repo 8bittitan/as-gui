@@ -2,11 +2,12 @@
 //! maths; the view builds on them.
 
 use rune::{El, Tx, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, ControlSize};
+use rune_kit::ButtonVariant;
 
 use crate::agent::{SearchHit, TraceSpan, TurnTrace};
 use crate::chat::Chat;
 use crate::conversation::json_card;
+use crate::satellite::{self, Fit, RADIUS_CONTROL};
 
 const LABEL_WIDTH: f32 = 150.0;
 const TRACK_WIDTH: f32 = 260.0;
@@ -187,13 +188,13 @@ fn summary_line(summary: &Summary) -> String {
 pub fn affordance(k: &rune_kit::Kit, message_id: &str, trace: &TurnTrace) -> El {
     let total = seconds(summary(trace, trace.finished.unwrap_or(trace.sent)).total);
     let id = message_id.to_string();
-    Button::new(format!("⏱ {total}"))
+    satellite::button(total)
+        .icon(&crate::satellite::icons::TIMER)
         .variant(ButtonVariant::GhostMuted)
-        .control_size(ControlSize::Small)
         .expanded(trace.open)
         .help("Where this answer's time went")
         .on_press(move |s: &mut Chat| s.toggle_timeline(&id))
-        .build(k)
+        .sized(k, satellite::Size::Small)
         .key(format!("timing-{message_id}"))
 }
 
@@ -232,7 +233,7 @@ fn row_key(kind: RowKind, id: &str) -> String {
 
 fn bar_row(k: &rune_kit::Kit, id: &str, trace: &TurnTrace, bar: &Bar) -> El {
     let fill = match bar.kind {
-        RowKind::Request => k.c.icon_faint,
+        RowKind::Request => k.c.icon_muted,
         RowKind::Tool(_) if bar.failed => k.c.danger.icon,
         RowKind::Tool(_) => k.c.bg_accent,
         RowKind::Reply => k.c.icon_muted,
@@ -241,8 +242,8 @@ fn bar_row(k: &rune_kit::Kit, id: &str, trace: &TurnTrace, bar: &Bar) -> El {
         .w(TRACK_WIDTH)
         .h(BAR_HEIGHT + 6.0)
         .center_y()
-        .radius(4.0)
-        .fill(k.c.layer_01)
+        .radius(RADIUS_CONTROL)
+        .fill(k.c.layer_02)
         .child(el().w(bar.x.min(TRACK_WIDTH - MARKER_WIDTH)))
         .child(
             el().w(bar.width)
@@ -251,7 +252,7 @@ fn bar_row(k: &rune_kit::Kit, id: &str, trace: &TurnTrace, bar: &Bar) -> El {
                 } else {
                     BAR_HEIGHT
                 })
-                .radius(3.0)
+                .radius(if bar.marker { 1.0 } else { 2.0 })
                 .fill(fill),
         );
     let mut r = row()
@@ -261,7 +262,7 @@ fn bar_row(k: &rune_kit::Kit, id: &str, trace: &TurnTrace, bar: &Bar) -> El {
         .child(
             col().w(LABEL_WIDTH).child(
                 text(&bar.label)
-                    .font(k.ty.ui_compact)
+                    .font(k.ty.small)
                     .color(k.c.text_muted)
                     .truncate()
                     .ml(bar.depth as f32 * INDENT),
@@ -270,7 +271,7 @@ fn bar_row(k: &rune_kit::Kit, id: &str, trace: &TurnTrace, bar: &Bar) -> El {
         .child(track)
         .child(
             text(stats(trace, bar))
-                .font(k.ty.ui_compact)
+                .font(k.ty.small)
                 .color(k.c.text_faint),
         );
     if let RowKind::Tool(i) = bar.kind {
@@ -317,7 +318,7 @@ fn span_json(k: &rune_kit::Kit, id: &str, index: usize, span: &TraceSpan) -> El 
 /// The waterfall for one settled turn: a summary line, then a row per request, tool call and
 /// reply on a shared time axis. Pressing a tool row opens its input and output.
 pub fn timeline(k: &rune_kit::Kit, message_id: &str, trace: &TurnTrace, now: f64) -> El {
-    let mut view = col().key(format!("timeline-{message_id}")).gap(6.0).child(
+    let mut view = col().key(format!("timeline-{message_id}")).gap(8.0).child(
         text(summary_line(&summary(trace, now)))
             .key(format!("timeline-summary-{message_id}"))
             .font(k.ty.ui_compact)
