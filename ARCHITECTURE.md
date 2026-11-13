@@ -1,6 +1,6 @@
 # Architecture
 
-as-gui is one Rust crate (edition 2024). It is a chat front end for Algolia Agent Studio agents, built on the Rune UI framework: `rune`, `rune-kit`, `rune-theme-opencode`, `rune-knobs` and `rune-notify`, all pinned to one revision of the `anomalyco/rune` fork. The app has two windows, the main chat window and the Quick Ask launcher panel, started with `rune::run_windows`.
+as-gui is one Rust crate (edition 2024). It is a chat front end for Algolia Agent Studio agents, built on the Rune UI framework: `rune`, `rune-kit`, `rune-knobs` and `rune-notify`, all pinned to one revision of the `anomalyco/rune` fork. The app has two windows, the main chat window and the Quick Ask launcher panel, started with `rune::run_windows`. Its look is Algolia's Satellite design system, built in the app (`src/satellite.rs`).
 
 ## How a turn flows
 
@@ -38,12 +38,24 @@ The rules come from treating a seam as the place where behavior can change witho
 - **Loading.** Every background load is a `Load` (`Idle`, `Loading`, `Ready`, `Failed`) read through `Load::phase(now)`: nothing for 150 ms, then a skeleton that stays at least 300 ms. `Chat::screen`, `sidebar_view` and `pane_view` are the only places that decide what to show, so the sidebar and the chat pane never flash a half-loaded state. Loads carry a generation number, so a result for an agent the user already left is dropped.
 - **New conversations.** A conversation that starts in this run, or a promoted Quick Ask, is marked loaded at once. Fetching it back would blank the pane and replace the live exchange with the server's older copy.
 - **Applications.** `Chat::applications` and `active` hold the saved Algolia applications. `add_application`, `switch_application`, `remove_application` and `switch_to_mock` are the only ways to change them. An app ID must be ten letters or digits because it becomes part of a hostname. Switching cancels any reply, bumps the generation and reopens the application's last agent. A `Connector` builds the client and directory for each application, which is how tests run offline.
-- **Application colors.** `palette.rs` gives each application an `AppColour`, chosen as the least used one, saved by id, and shown as a dot, a swatch picker, the Quick Ask chip and an optional top bar. The name always appears beside the dot, so color is never the only signal.
+- **Application colors.** `palette.rs` gives each application an `AppColour`, chosen as the least used one, saved by id, and shown as a dot, a swatch picker, the Quick Ask chip and an optional top bar. The colors are Satellite scale steps and brand planets, each at least 3:1 against the page in both appearances and never an accent tone. The name always appears beside the dot, so color is never the only signal.
 - **Appearance.** `Chat::appearance` holds width, theme, accent, window tint and open-at-launch. `Chat::add_form` holds the add-application dialog, which the first run reuses.
+
+### Theme (`src/satellite.rs` and `src/satellite/`)
+
+`satellite::kit(dark, accent)` builds the rune-kit `Kit` every view reads. `install` sets Satellite's focus ring and tooltip, and each window's view calls it on every run.
+
+- `scale.rs`: Satellite's color scales (`Hue`) and the brand's planet colors (`Planet`).
+- `roles.rs`: the palette. Light follows Satellite's roles. Satellite has no dark mode, so dark is derived from its navy greys.
+- `accent.rs`: the settings' accents mapped to Satellite scales, as a fill and an ink.
+- `elevation.rs`: the z100 to z500 shadows.
+- `typography.rs`: the type scale, in SF Pro and the bundled Fira Code (`assets/fonts/`).
+- `markdown.rs`: the look of rendered markdown and code syntax.
+- `icons.rs`: the Lucide icons the app and the kit draw.
 
 ### Views
 
-- `conversation.rs`: message bubbles and their actions, search hits as cards, the hit reader, the empty state and the composer.
+- `conversation.rs`: message bubbles and their actions, tool calls as one card per call (a header with what it did and found, and its results, JSON or error beneath; hits as plain-excerpt rows, the first few until Show all), the hit reader, the empty state and the composer.
 - `shell.rs`: the window chrome, the agent picker, the settings dialog, global key handling and the error toast.
 - `command_bar.rs`: the ⌘K command bar. `entries(&Chat, query)` is a pure function over four groups (agents, applications, conversations, actions) with fuzzy matching.
 - `search_panel.rs`: "Search it yourself". It re-runs a tool call's query through `IndexSearch`, tags each run so a late result is dropped, marks the hits the agent saw, validates the parameters as you type, and builds a curl command with the key masked and every value shell-quoted.

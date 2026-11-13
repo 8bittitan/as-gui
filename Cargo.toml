@@ -12,6 +12,12 @@ publish = false
 incremental = true
 strip = true
 
+# Dependencies build optimized in debug too: unoptimized text shaping and glyph rasterising
+# stalled the first frame that showed new text (a tool card opening) for a visible beat. Only
+# this crate stays at opt-level 0, so incremental builds keep their speed.
+[profile.dev.package."*"]
+opt-level = 3
+
 [features]
 # The live tuning panel (⌘⇧K). Shipped builds opt out (`just build`) and run on the knobs'
 # default values, which are the design constants.
@@ -33,7 +39,6 @@ rune = { git = "https://github.com/anomalyco/rune.git", rev = "04b38ae0a73bda03f
 rune-kit = { git = "https://github.com/anomalyco/rune.git", rev = "04b38ae0a73bda03f010e97d2fff540ab91f67b0", features = [
   "markdown",
 ] }
-rune-theme-opencode = { git = "https://github.com/anomalyco/rune.git", rev = "04b38ae0a73bda03f010e97d2fff540ab91f67b0" }
 wgpu = { version = "~30.0.1", default-features = false }
 rune-knobs = { git = "https://github.com/anomalyco/rune.git", rev = "04b38ae0a73bda03f010e97d2fff540ab91f67b0" }
 rune-notify = { git = "https://github.com/anomalyco/rune.git", rev = "04b38ae0a73bda03f010e97d2fff540ab91f67b0" }

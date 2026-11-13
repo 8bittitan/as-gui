@@ -24,6 +24,7 @@ mod palette;
 mod paths;
 mod playground;
 mod quick_ask;
+mod satellite;
 mod scenes;
 mod search_panel;
 mod selection;
@@ -154,8 +155,8 @@ fn main() {
 
         let mut main = App::new(AppSpec::<Chat> {
             scenes: SCENES,
-            fonts: rune_theme_opencode::FONTS,
-            families: rune_theme_opencode::FAMILIES,
+            fonts: satellite::FONTS,
+            families: satellite::FAMILIES,
             setup: Some(chat::setup),
             poll: Some(chat::poll),
             on_key: Some(shell::on_key),
@@ -214,6 +215,8 @@ fn main() {
                 ("quick-ask-error", quick_ask::error_scene),
                 ("quick-ask-selection", quick_ask::selection_scene),
             ],
+            fonts: satellite::FONTS,
+            families: satellite::FAMILIES,
             setup: Some(|s: &mut QuickAsk, waker: Waker| s.waker = Some(waker)),
             poll: Some(quick_ask::poll),
             ..AppSpec::new(

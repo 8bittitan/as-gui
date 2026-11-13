@@ -132,7 +132,6 @@ pub fn tools(s: &mut Chat) {
     let mut a = ChatMessage::assistant("a1");
     a.streaming = false;
     a.thought = Some(4.0);
-    a.tools_open = true;
     a.tools = vec![ToolCall {
         name: "algolia_search_index_products_markdown".into(),
         input: Some(
@@ -204,7 +203,6 @@ pub fn tool_error(s: &mut Chat) {
     timeline(s);
     let m = s.sessions[s.current].messages.last_mut().unwrap();
     let reason = "Cannot search in `brand` attribute, you need to add `searchable(brand)` to attributesForFaceting. (Correlation-ID: EXAMPLE-0aBcD-0123456789abcdef)";
-    m.tools_open = true;
     m.tools.push(ToolCall {
         name: "algolia_search_for_facet_values".into(),
         input: Some(
@@ -232,7 +230,9 @@ pub fn tool_error(s: &mut Chat) {
 pub fn timeline(s: &mut Chat) {
     tools(s);
     let m = s.sessions[s.current].messages.last_mut().unwrap();
-    m.tools_open = false;
+    for t in &mut m.tools {
+        t.open = false;
+    }
     let span = |call_id: &str, name: &str, start: f64, end: f64, tool: usize| TraceSpan {
         call_id: call_id.into(),
         name: name.into(),

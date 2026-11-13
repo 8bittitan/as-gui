@@ -1,17 +1,21 @@
 //! The app chrome: the SplitView with the session sidebar, the toolbar with the agent
 //! title, the agent-picker screen, the global keybinds and the error toast.
 
+use crate::satellite::typography::{BODY, HEADING, SUBHEADING};
+use crate::satellite::{
+    self, Fit, Hue, Level, MODAL_MEDIUM, MODAL_SMALL, Planet, RADIUS_CARD, RADIUS_CONTROL,
+    RADIUS_MODAL, icons,
+};
 use rune::{
-    Color, Cx, El, Key, KeyEvent, ScrollSpec, TextStyle, Transition, Tx, col, color, el, icon, row,
+    Color, Cx, El, Key, KeyEvent, ScrollSpec, SpringPair, Transition, Tx, col, el, icon, row,
     spacer, text, text_input,
 };
 use rune_kit::shell::SidebarToggle;
 use rune_kit::{
-    Badge, Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Markdown,
-    SegmentedControl, Select, ShortcutRecorder, Sidebar, SidebarRow, SidebarSection, Spinner,
-    SplitView, Switch, Toolbar, shortcut_error_message,
+    Badge, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Markdown, SegmentedControl,
+    Select, ShortcutRecorder, Sidebar, SidebarRow, SidebarSection, Spinner, SplitView, Switch,
+    Toolbar, shortcut_error_message,
 };
-use rune_theme_opencode::{icons, kit};
 use tracing::warn;
 
 use crate::agent::{AgentInfo, AgentStatus};
@@ -58,6 +62,7 @@ pub fn on_key(s: &mut Chat, ev: &KeyEvent, tx: &mut Tx) -> bool {
 pub fn view(s: &Chat, cx: &mut Cx<Chat>) -> El {
     let theme_kit = kit_for(s.appearance.theme, s.appearance.accent, cx.system_dark());
     let k = &theme_kit;
+    crate::satellite::install(k, cx);
     let mut layer: Vec<El> = Vec::new();
 
     let screen = s.screen(s.now);
@@ -132,8 +137,8 @@ pub fn view(s: &Chat, cx: &mut Cx<Chat>) -> El {
             .gap(8.0)
             .center_y()
             .px(8.0)
-            .py(3.0)
-            .radius(6.0)
+            .py(4.0)
+            .radius(RADIUS_CONTROL)
             .child(letter_chip(&name, k, 18.0))
             .child(text(&name).font(k.ty.ui_medium).color(k.c.text_base));
         let published = s
@@ -151,7 +156,7 @@ pub fn view(s: &Chat, cx: &mut Cx<Chat>) -> El {
         }
         toolbar = toolbar.center(title);
     }
-    let mut trailing = row().gap(10.0).center_y();
+    let mut trailing = row().gap(12.0).center_y();
     let mut has_trailing = false;
     if s.pending {
         trailing = trailing.child(Spinner::new().build(k));
@@ -240,55 +245,9 @@ pub fn view(s: &Chat, cx: &mut Cx<Chat>) -> El {
     rune_kit::root(tuned, layer)
 }
 
-/// The theme's kit for the settings' appearance, with the accent dialled in: the accent paints
-/// fills, reads as accent text and icons, and drives the focus ring.
+/// The Satellite kit for the settings' appearance and accent.
 pub fn kit_for(theme: ThemePref, accent: Accent, system_dark: bool) -> rune_kit::Kit {
-    let mut k = kit(theme.resolve(system_dark)).clone();
-    k.c.bg_accent = accent_fill(accent, k.dark);
-    let ink = accent_ink(accent, k.dark);
-    k.c.text_accent = ink;
-    k.c.icon_accent = ink;
-    k.c.border_focus = ink;
-    k
-}
-
-/// The accent's surface colour: it takes the theme's own ink (dark on it in dark mode, white in
-/// light), so fills sit in the light-to-mid range.
-fn accent_fill(accent: Accent, dark: bool) -> Color {
-    let hex = match (accent, dark) {
-        (Accent::Blue, true) => "#0a84ff",
-        (Accent::Blue, false) => "#0071e3",
-        (Accent::Purple, true) => "#bf5af2",
-        (Accent::Purple, false) => "#9d3fdb",
-        (Accent::Pink, true) => "#ff375f",
-        (Accent::Pink, false) => "#e02d58",
-        (Accent::Orange, true) => "#ff9f0a",
-        (Accent::Orange, false) => "#c77700",
-        (Accent::Green, true) => "#30d158",
-        (Accent::Green, false) => "#23a144",
-        (Accent::Graphite, true) => "#98989d",
-        (Accent::Graphite, false) => "#7c7c82",
-    };
-    color::hex(hex).expect("accent hexes parse")
-}
-
-/// The accent's ink: readable accent text and icons on the background.
-fn accent_ink(accent: Accent, dark: bool) -> Color {
-    let hex = match (accent, dark) {
-        (Accent::Blue, true) => "#6fb5ff",
-        (Accent::Blue, false) => "#0069db",
-        (Accent::Purple, true) => "#d9a9ff",
-        (Accent::Purple, false) => "#8e34cc",
-        (Accent::Pink, true) => "#ff7e9d",
-        (Accent::Pink, false) => "#c92450",
-        (Accent::Orange, true) => "#ffc069",
-        (Accent::Orange, false) => "#b06a00",
-        (Accent::Green, true) => "#74e08d",
-        (Accent::Green, false) => "#1f8a3c",
-        (Accent::Graphite, true) => "#b8b8bd",
-        (Accent::Graphite, false) => "#5f5f66",
-    };
-    color::hex(hex).expect("accent hexes parse")
+    crate::satellite::kit(theme.resolve(system_dark), accent).clone()
 }
 
 /// A search hit zoomed out of its card: the full markdown, scrollable, flown in from the
@@ -298,59 +257,50 @@ fn reader_dialog(s: &Chat, k: &rune_kit::Kit, layer: &mut Vec<El>) {
         return;
     };
     let close = |s: &mut Chat| s.close_reader();
-    let mut title = text(&hit.title)
-        .font(k.ty.ui_medium)
-        .color(k.c.text_base)
-        .truncate();
-    title = title.grow(1.0).min_w(0.0);
-    let mut header = row()
-        .w_full()
-        .px(16.0)
-        .pt(12.0)
-        .pb(8.0)
-        .gap(8.0)
-        .center_y()
-        .child(title);
+    let mut header = modal_header(k, "hit-reader-header", dialog_title(k, &hit.title), 32.0);
     header = header.child(
-        Button::new("Search it yourself")
+        satellite::button("Search it yourself")
             .variant(ButtonVariant::Ghost)
             .disabled(!s.reader_can_search())
             .on_press(|s: &mut Chat| s.open_search_from_reader())
-            .build(k)
+            .sized(k, satellite::Size::Medium)
             .key("hit-reader-search"),
     );
     if let Some(url) = hit.url.clone() {
         header = header.child(
-            Button::new("Open source")
+            satellite::button("Open source")
                 .variant(ButtonVariant::Outline)
                 .on_press_tx(move |_: &mut Chat, tx: &mut Tx| {
                     if let Err(error) = tx.open_url(&url) {
                         warn!("could not open {url}: {error:?}");
                     }
                 })
-                .build(k)
+                .sized(k, satellite::Size::Medium)
                 .key("hit-reader-open"),
         );
     }
     header = header.child(
         IconButton::new(k.glyph.close)
             .variant(IconButtonVariant::Ghost)
-            .control_size(ControlSize::Regular)
             .label("Close")
             .on_press(close)
-            .build(k)
+            .sized(k, satellite::Size::Medium)
             .key("hit-reader-close"),
     );
     let body = col()
         .key("hit-reader-body")
         .grow(1.0)
         .min_h(0.0)
-        .px(16.0)
-        .pb(16.0)
+        .px(32.0)
+        .py(24.0)
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
-        .child(Markdown::new(hit.snippet.unwrap_or_default()).build(k));
+        .child(
+            Markdown::new(hit.snippet.unwrap_or_default())
+                .style(crate::satellite::markdown(k))
+                .build(k),
+        );
     let panel = modal_panel(k, "hit-reader", &hit.title, 760.0, header, body)
         .h_full()
         .max_h(680.0)
@@ -372,31 +322,17 @@ fn settings_dialog(s: &Chat, k: &rune_kit::Kit, layer: &mut Vec<El>, portal: &mu
     };
     let dismiss = IconButton::new(k.glyph.close)
         .variant(IconButtonVariant::Ghost)
-        .control_size(ControlSize::Regular)
         .label("Close")
         .on_press(close)
-        .build(k)
+        .sized(k, satellite::Size::Small)
         .key("close");
-    let header = row()
-        .key("settings-header")
-        .w_full()
-        .px(12.0)
-        .pt(12.0)
-        .pb(4.0)
-        .center_y()
-        .child(el().w(28.0))
-        .child(
-            col()
-                .grow(1.0)
-                .items_center()
-                .child(dialog_title(k, "Settings")),
-        )
-        .child(el().w(28.0).center().child(dismiss));
+    let header =
+        modal_header(k, "settings-header", dialog_title(k, "Settings"), 32.0).child(dismiss);
     let panel = modal_panel(
         k,
         "settings-dialog",
         "Settings",
-        420.0,
+        MODAL_MEDIUM,
         header,
         // The body scrolls only when the window is too short for it: the panel shrinks to the
         // window and the body takes what's left.
@@ -463,36 +399,35 @@ fn credentials_dialog(s: &Chat, k: &rune_kit::Kit, layer: &mut Vec<El>) {
         .center_y();
     if first_run && crate::chat::MOCK_AVAILABLE {
         buttons = buttons.child(
-            Button::new("Use mock agent")
+            satellite::button("Use mock agent")
                 .variant(ButtonVariant::Ghost)
                 .on_press(|s: &mut Chat| s.use_mock())
-                .build(k)
+                .sized(k, satellite::Size::Medium)
                 .key("credentials-mock"),
         );
     }
     buttons = buttons.child(spacer());
     if !first_run {
         buttons = buttons.child(
-            Button::new("Cancel")
+            satellite::button("Cancel")
                 .variant(ButtonVariant::Ghost)
                 .on_press(|s: &mut Chat| s.cancel_add_application())
-                .build(k)
+                .sized(k, satellite::Size::Medium)
                 .key("credentials-cancel"),
         );
     }
     buttons = buttons.child(
-        Button::new("Save")
+        satellite::button("Save")
             .variant(ButtonVariant::Submit)
             .disabled(blank)
             .on_press(|s: &mut Chat| s.submit_credentials())
-            .build(k)
+            .sized(k, satellite::Size::Medium)
             .key("credentials-save"),
     );
     let mut body = col()
         .w_full()
-        .padding(16.0)
-        .pt(4.0)
-        .gap(12.0)
+        .padding(24.0)
+        .gap(16.0)
         .child(
             text("Connect as-gui to an Algolia application. The key needs the search, settings and logs ACLs; both are stored on this machine only.")
                 .wrap()
@@ -502,19 +437,19 @@ fn credentials_dialog(s: &Chat, k: &rune_kit::Kit, layer: &mut Vec<El>) {
         .child(
             rune_kit::Field::new()
                 .label("Application ID")
-                .control(app_field)
+                .control(field_box(k, app_field))
                 .build(k),
         )
         .child(
             rune_kit::Field::new()
                 .label("Search API key")
-                .control(key_field)
+                .control(field_box(k, key_field))
                 .build(k),
         )
         .child(
             rune_kit::Field::new()
                 .label("Name (optional)")
-                .control(name_field)
+                .control(field_box(k, name_field))
                 .build(k),
         );
     if let Some(error) = &s.add_form.error {
@@ -526,13 +461,8 @@ fn credentials_dialog(s: &Chat, k: &rune_kit::Kit, layer: &mut Vec<El>) {
         );
     }
     let body = body.child(buttons);
-    let header = col()
-        .key("credentials-header")
-        .w_full()
-        .items_center()
-        .pt(16.0)
-        .child(dialog_title(k, title));
-    let panel = modal_panel(k, "credentials-dialog", title, 420.0, header, body)
+    let header = modal_header(k, "credentials-header", dialog_title(k, title), 24.0);
+    let panel = modal_panel(k, "credentials-dialog", title, MODAL_SMALL, header, body)
         .modal(true, move |s: &mut Chat| {
             if !first_run {
                 s.cancel_add_application();
@@ -559,14 +489,37 @@ pub(crate) fn modal_panel(
         .label(label.to_string())
         .w_full()
         .max_w(width)
-        .radius(10.0)
+        .radius(RADIUS_MODAL)
         .fill(k.c.layer_01)
+        .transition(modal_entrance(k))
         .child(header)
         .child(body);
-    for shadow in k.shadow_layers(&k.elevation.overlay) {
+    for shadow in crate::satellite::shadow(k, Level::Z500) {
         panel = panel.box_shadow(shadow);
     }
     panel
+}
+
+/// Satellite's modal entrance: up 8 points from 94 % scale as it fades in.
+fn modal_entrance(k: &rune_kit::Kit) -> Transition {
+    Transition::scale(0.94)
+        .combined(Transition::offset(0.0, 8.0))
+        .springs(SpringPair::with_exit_ratio(k.motion.overlay, 0.8))
+}
+
+/// A Satellite modal header: the title on the leading edge, optional controls trailing, over
+/// a hairline.
+fn modal_header(k: &rune_kit::Kit, key: &str, title: El, px: f32) -> El {
+    row()
+        .key(key.to_string())
+        .w_full()
+        .min_h(56.0)
+        .px(px)
+        .py(8.0)
+        .gap(8.0)
+        .center_y()
+        .border_sides([0.0, 0.0, 1.0, 0.0], k.c.border_muted)
+        .child(title.grow(1.0).min_w(0.0))
 }
 
 fn push_scrim(k: &rune_kit::Kit, layer: &mut Vec<El>, key: &str) {
@@ -619,16 +572,27 @@ pub(crate) fn push_top_modal_layer(
     );
 }
 
+/// Satellite's text field box around a bare `text_input`: page fill, the kit's field border,
+/// radius 4, and the focus colour as its border while it has focus.
+pub(crate) fn field_box(k: &rune_kit::Kit, input: El) -> El {
+    let mut field = col()
+        .w_full()
+        .min_h(32.0)
+        .px(12.0)
+        .py(6.0)
+        .justify_center()
+        .radius(RADIUS_CONTROL)
+        .fill(k.c.bg_base)
+        .focus_within_ring(1.0, -1.0, k.c.border_focus)
+        .focus_within_flat();
+    for shadow in k.shadow_layers(k.elevation.input()) {
+        field = field.box_shadow(shadow);
+    }
+    field.child(input)
+}
+
 fn dialog_title(k: &rune_kit::Kit, title: &str) -> El {
-    text(title)
-        .font(TextStyle {
-            size: 15.0,
-            weight: 590.0,
-            tracking: -0.13,
-            line_height: 20.0,
-            ..k.ty.ui_medium
-        })
-        .color(k.c.text_base)
+    text(title).font(HEADING).color(k.c.text_base).truncate()
 }
 
 const WIDTH_OPTIONS: [&str; 2] = ["Comfortable", "Wide"];
@@ -655,9 +619,9 @@ fn settings_body(s: &Chat, k: &rune_kit::Kit, portal: &mut Vec<El>) -> El {
     });
     col()
         .w_full()
-        .padding(16.0)
-        .pt(6.0)
-        .gap(16.0)
+        .padding(32.0)
+        .pt(24.0)
+        .gap(24.0)
         .child(section(
             k,
             "Appearance",
@@ -680,11 +644,10 @@ fn settings_body(s: &Chat, k: &rune_kit::Kit, portal: &mut Vec<El>) -> El {
         .child(section(k, "Keyboard shortcuts", keybinds_card(s, k)))
         .child(
             row().w_full().child(spacer()).child(
-                Button::new("Restore defaults")
-                    .control_size(ControlSize::Small)
+                satellite::button("Restore defaults")
                     .disabled(!s.keybinds_customised())
                     .on_press(|s: &mut Chat| s.restore_default_keybinds())
-                    .build(k)
+                    .sized(k, satellite::Size::Small)
                     .key("keybinds-restore"),
             ),
         )
@@ -805,26 +768,24 @@ fn applications_card(s: &Chat, k: &rune_kit::Kit) -> El {
         head = head.child(if active {
             Badge::new("Active").build(k)
         } else {
-            Button::new("Switch")
+            satellite::button("Switch")
                 .variant(ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
                 .on_press(move |s: &mut Chat| s.switch_application(i))
-                .build(k)
+                .sized(k, satellite::Size::Small)
                 .key(format!("application-switch-{i}"))
         });
         head = head.child(
-            Button::new("Remove")
+            satellite::button("Remove")
                 .variant(ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
                 .on_press(move |s: &mut Chat| s.remove_application(i))
-                .build(k)
+                .sized(k, satellite::Size::Small)
                 .key(format!("application-remove-{i}")),
         );
         let mut details = col()
             .key(format!("application-row-{i}"))
             .w_full()
-            .px(14.0)
-            .py(10.0)
+            .px(16.0)
+            .py(12.0)
             .gap(4.0)
             .child(head)
             .child(
@@ -841,15 +802,17 @@ fn applications_card(s: &Chat, k: &rune_kit::Kit) -> El {
         }
         card = card.child(details);
     }
-    card.child(row_separator(k)).child(
-        row().w_full().px(14.0).py(8.0).child(spacer()).child(
-            Button::new("Add application…")
-                .control_size(ControlSize::Small)
+    if !s.applications.is_empty() {
+        card = card.child(row_separator(k));
+    }
+    card.child(
+        row().w_full().px(16.0).py(8.0).child(spacer()).child(
+            satellite::button("Add application…")
                 .on_press(|s: &mut Chat| {
                     s.add_form.error = None;
                     s.add_form.open = true;
                 })
-                .build(k)
+                .sized(k, satellite::Size::Small)
                 .key("applications-add"),
         ),
     )
@@ -872,8 +835,8 @@ fn keybinds_card(s: &Chat, k: &rune_kit::Kit) -> El {
                 col()
                     .key(format!("keybind-{}-warning", action.id()))
                     .w_full()
-                    .px(14.0)
-                    .pb(10.0)
+                    .px(16.0)
+                    .pb(12.0)
                     .child(text(warning).font(k.ty.small).color(k.c.danger.fg).wrap()),
             );
         }
@@ -896,13 +859,12 @@ fn accessibility_row(s: &Chat, k: &rune_kit::Kit) -> Option<El> {
         Access::Granted => true,
         Access::NotGranted => false,
     };
-    let mut control = row().gap(6.0).center_y();
+    let mut control = row().gap(8.0).center_y();
     if !granted {
         control = control.child(
-            Button::new("Grant access…")
-                .control_size(ControlSize::Small)
+            satellite::button("Grant access…")
                 .on_press(|s: &mut Chat| s.selection.request_access())
-                .build(k)
+                .sized(k, satellite::Size::Small)
                 .key("accessibility-grant"),
         );
     }
@@ -913,7 +875,7 @@ fn accessibility_row(s: &Chat, k: &rune_kit::Kit) -> Option<El> {
         .child(settings_row(k, "Accessibility access", control));
     if !granted {
         status = status.child(
-            col().w_full().px(14.0).pb(10.0).child(
+            col().w_full().px(16.0).pb(12.0).child(
                 text(ACCESSIBILITY_HELP)
                     .font(k.ty.small)
                     .color(k.c.text_muted)
@@ -948,14 +910,13 @@ fn keybind_control(s: &Chat, k: &rune_kit::Kit, action: Action) -> El {
     } else {
         recorder
     };
-    let mut control = row().gap(6.0).center_y();
+    let mut control = row().gap(8.0).center_y();
     if !s.keymap.is_default(action) {
         control = control.child(
-            Button::new("Reset")
+            satellite::button("Reset")
                 .variant(ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
                 .on_press(move |s: &mut Chat| s.reset_keybind(action))
-                .build(k)
+                .sized(k, satellite::Size::Small)
                 .key(format!("keybind-reset-{}", action.id())),
         );
     }
@@ -967,25 +928,26 @@ fn section(k: &rune_kit::Kit, name: &str, card: El) -> El {
     col()
         .key(format!("section-{name}"))
         .w_full()
-        .gap(6.0)
+        .gap(8.0)
         .child(
-            text(name)
-                .font(TextStyle {
-                    weight: 590.0,
-                    ..TextStyle::new(13.0, 440.0).lh(16.0)
-                })
+            text(name.to_uppercase())
+                .label(name)
+                .font(SUBHEADING)
                 .color(k.c.text_muted),
         )
         .child(card)
 }
 
 fn card(k: &rune_kit::Kit) -> El {
-    col()
+    let mut card = col()
         .key("card")
         .w_full()
-        .radius(10.0)
-        .fill(k.c.layer_02)
-        .border(1.0, k.c.border_muted)
+        .radius(RADIUS_CARD)
+        .fill(k.c.layer_01);
+    for shadow in crate::satellite::shadow(k, Level::Z100) {
+        card = card.box_shadow(shadow);
+    }
+    card
 }
 
 /// A labelled setting with its control on the trailing edge.
@@ -994,22 +956,18 @@ fn settings_row(k: &rune_kit::Kit, label: &str, control: El) -> El {
         .key(format!("row-{label}"))
         .w_full()
         .min_h(44.0)
-        .px(14.0)
+        .px(16.0)
         .py(8.0)
         .gap(12.0)
         .center_y()
-        .child(text(label).font(k_label_font()).color(k.c.text_base))
+        .child(text(label).font(BODY).color(k.c.text_base))
         .child(spacer())
         .child(control)
 }
 
-fn k_label_font() -> TextStyle {
-    TextStyle::new(13.0, 440.0).lh(18.0)
-}
-
 fn row_separator(k: &rune_kit::Kit) -> El {
     col()
-        .px(14.0)
+        .px(16.0)
         .child(el().w_full().h(1.0).fill(k.c.border_muted))
 }
 
@@ -1038,14 +996,14 @@ fn accent_swatches(s: &Chat, k: &rune_kit::Kit) -> El {
         .key("accent-swatches")
         .role("radiogroup")
         .label("Accent colour")
-        .gap(10.0)
+        .gap(12.0)
         .center_y()
         .children(Accent::ALL.map(|accent| accent_swatch(s, accent, k)))
 }
 
 fn accent_swatch(s: &Chat, accent: Accent, k: &rune_kit::Kit) -> El {
     let selected = s.appearance.accent == accent;
-    let fill = accent_fill(accent, k.dark);
+    let fill = crate::satellite::tones(accent, k.dark).fill;
     let mut swatch = el()
         .key(format!("accent-{}", accent.label().to_ascii_lowercase()))
         .role("radio")
@@ -1088,7 +1046,7 @@ fn width_control(s: &Chat, k: &rune_kit::Kit, portal: &mut Vec<El>) -> El {
 /// The collapsed sidebar: a narrow rail of icons — new session, then one chip per session —
 /// shown when the sidebar toggles away, so sessions stay one click deep.
 fn sidebar_rail(s: &Chat, k: &rune_kit::Kit) -> El {
-    let mut sessions = col().key("rail-sessions").gap(6.0).items_center();
+    let mut sessions = col().key("rail-sessions").gap(8.0).items_center();
     let listed = match s.sidebar_view(s.now) {
         SidebarView::Blank | SidebarView::Skeleton => Vec::new(),
         _ => visible_session_indices(s),
@@ -1101,7 +1059,7 @@ fn sidebar_rail(s: &Chat, k: &rune_kit::Kit) -> El {
             .role("button")
             .label(&session.title)
             .size(36.0, 36.0)
-            .radius(9.0)
+            .radius(RADIUS_CONTROL)
             .center()
             .help(&session.title)
             .on_press(move |s: &mut Chat| s.select_session(i));
@@ -1118,14 +1076,14 @@ fn sidebar_rail(s: &Chat, k: &rune_kit::Kit) -> El {
         .h_full()
         .fill(k.c.bg_deep)
         .items_center()
-        .pt(10.0)
+        .pt(12.0)
         .pb(12.0)
-        .gap(10.0)
+        .gap(12.0)
         .child(
             IconButton::new(&icons::PLUS)
                 .label("New conversation")
                 .on_press(|s: &mut Chat| s.new_session())
-                .build(k)
+                .sized(k, satellite::Size::Medium)
                 .key("rail-new-session")
                 .help("New conversation"),
         )
@@ -1140,10 +1098,10 @@ fn sidebar_rail(s: &Chat, k: &rune_kit::Kit) -> El {
                 .child(sessions),
         )
         .child(
-            IconButton::new(&icons::SETTINGS_GEAR)
+            IconButton::new(&icons::SETTINGS)
                 .label("Settings")
                 .on_press(|s: &mut Chat| s.settings_open = true)
-                .build(k)
+                .sized(k, satellite::Size::Medium)
                 .key("rail-settings")
                 .help(hinted("Settings", &s.keymap.hint(Action::Settings))),
         )
@@ -1165,18 +1123,9 @@ pub(crate) fn letter_chip(source: &str, k: &rune_kit::Kit, size: f32) -> El {
         .find(|c| c.is_alphanumeric())
         .map(|c| c.to_ascii_uppercase())
         .unwrap_or('•');
-    let palette = [
-        k.c.bg_accent,
-        k.c.success.fg,
-        k.c.warning.fg,
-        k.c.info.fg,
-        k.c.danger.fg,
-        k.c.text_accent,
-    ];
-    let color = palette[source.bytes().map(|b| b as usize).sum::<usize>() % palette.len()];
     el().size(size, size)
-        .radius(size * 0.28)
-        .fill(color)
+        .radius((size * 0.25).min(RADIUS_CARD))
+        .fill(chip_fill(source))
         .center()
         .child(
             text(letter.to_string())
@@ -1187,6 +1136,26 @@ pub(crate) fn letter_chip(source: &str, k: &rune_kit::Kit, size: f32) -> El {
                 })
                 .color(k.c.white),
         )
+}
+
+/// Satellite's planet colours, with Jupiter and Saturn swapped for the green and orange deep
+/// enough to carry a white letter.
+fn chip_fills() -> [Color; 8] {
+    [
+        Planet::Neptune.at(1),
+        Planet::Mercury.at(1),
+        Hue::Green.at(700),
+        Hue::Orange.at(700),
+        Planet::Mars.at(1),
+        Planet::Venus.at(1),
+        Hue::Xenon.at(600),
+        Hue::Purple.at(600),
+    ]
+}
+
+fn chip_fill(source: &str) -> Color {
+    let fills = chip_fills();
+    fills[source.bytes().map(|b| b as usize).sum::<usize>() % fills.len()]
 }
 
 /// How many conversations the collapsed sidebar and rail show.
@@ -1244,8 +1213,8 @@ fn session_sidebar(s: &Chat, k: &rune_kit::Kit) -> El {
                 .key("sessions-skeleton")
                 .w_full()
                 .px(12.0)
-                .py(6.0)
-                .gap(14.0)
+                .py(8.0)
+                .gap(12.0)
                 .transition(Transition::opacity())
                 .children(
                     [150.0, 120.0, 168.0, 104.0]
@@ -1259,8 +1228,8 @@ fn session_sidebar(s: &Chat, k: &rune_kit::Kit) -> El {
                 .key("sessions-failed")
                 .w_full()
                 .px(12.0)
-                .py(6.0)
-                .gap(6.0)
+                .py(8.0)
+                .gap(8.0)
                 .child(
                     text("Couldn't load conversations")
                         .font(k.ty.small)
@@ -1268,10 +1237,9 @@ fn session_sidebar(s: &Chat, k: &rune_kit::Kit) -> El {
                 )
                 .child(text(error).font(k.ty.small).color(k.c.text_muted).wrap())
                 .child(
-                    Button::new("Retry")
-                        .control_size(ControlSize::Small)
+                    satellite::button("Retry")
                         .on_press(|s: &mut Chat| s.retry_sessions())
-                        .build(k)
+                        .sized(k, satellite::Size::Small)
                         .key("sessions-retry"),
                 ),
         );
@@ -1291,7 +1259,7 @@ fn session_sidebar(s: &Chat, k: &rune_kit::Kit) -> El {
                 .h(26.0)
                 .px(12.0)
                 .center_y()
-                .radius(6.0)
+                .radius(RADIUS_CONTROL)
                 .hover(k.c.hover)
                 .focusable(true)
                 .on_press(|s: &mut Chat| s.show_all_sessions = !s.show_all_sessions)
@@ -1314,7 +1282,7 @@ fn session_sidebar(s: &Chat, k: &rune_kit::Kit) -> El {
                 .h(26.0)
                 .px(12.0)
                 .center_y()
-                .radius(6.0)
+                .radius(RADIUS_CONTROL)
                 .hover(k.c.hover)
                 .focusable(true)
                 .on_press(|s: &mut Chat| s.show_hidden = !s.show_hidden)
@@ -1323,10 +1291,10 @@ fn session_sidebar(s: &Chat, k: &rune_kit::Kit) -> El {
     }
     Sidebar::new()
         .header(
-            Button::new("New conversation")
+            satellite::button("New conversation")
                 .icon(&icons::PLUS)
                 .on_press(|s: &mut Chat| s.new_session())
-                .build(k)
+                .sized(k, satellite::Size::Medium)
                 .key("new-session"),
         )
         .section(section)
@@ -1345,12 +1313,12 @@ fn settings_footer(k: &rune_kit::Kit, hint: &str) -> El {
         .px(12.0)
         .gap(8.0)
         .center_y()
-        .radius(8.0)
+        .radius(RADIUS_CONTROL)
         .hover(k.c.hover)
         .focusable(true)
         .help(hinted("Settings", hint))
         .on_press(|s: &mut Chat| s.settings_open = true)
-        .child(icon(&icons::SETTINGS_GEAR, 15.0).color(k.c.icon_muted))
+        .child(icon(&icons::SETTINGS, 15.0).color(k.c.icon_muted))
         .child(
             text("Settings")
                 .font(k.ty.ui)
@@ -1405,16 +1373,15 @@ fn agent_row(k: &rune_kit::Kit, agent: &AgentInfo, index: usize) -> El {
         .gap(12.0)
         .center_y()
         .padding(12.0)
-        .px(14.0)
-        .radius(10.0)
-        .fill(if published {
-            k.c.layer_01
-        } else {
-            rune::Color::TRANSPARENT
-        })
+        .px(16.0)
+        .radius(RADIUS_CARD)
         .child(info)
         .child(Badge::new(if published { "published" } else { "draft" }).build(k));
     if published {
+        row = row.fill(k.c.layer_01);
+        for shadow in crate::satellite::shadow(k, Level::Z100) {
+            row = row.box_shadow(shadow);
+        }
         row = row
             .role("button")
             .on_press(move |s: &mut Chat| s.choose_agent(index));
@@ -1449,13 +1416,13 @@ fn picker_main(s: &Chat, k: &rune_kit::Kit, screen: &Screen) -> El {
             col()
                 .grow(1.0)
                 .center()
-                .gap(10.0)
+                .gap(12.0)
                 .child(text("Couldn't load your agents").color(k.c.text_base))
                 .child(text(error).color(k.c.text_muted))
                 .child(
-                    Button::new("Retry")
+                    satellite::button("Retry")
                         .on_press(|s: &mut Chat| s.load_agents())
-                        .build(k)
+                        .sized(k, satellite::Size::Medium)
                         .key("agents-retry"),
                 ),
         );
@@ -1475,4 +1442,37 @@ fn picker_main(s: &Chat, k: &rune_kit::Kit, screen: &Screen) -> El {
         );
     }
     pane
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::satellite::contrast;
+
+    #[test]
+    fn white_letters_read_on_every_chip_fill() {
+        for fill in chip_fills() {
+            let ratio = contrast(Color::WHITE, fill);
+            assert!(ratio >= 3.0, "{} gives {ratio:.2}", fill.hex());
+        }
+    }
+
+    #[test]
+    fn chips_take_satellites_brand_colours() {
+        let fills = chip_fills();
+        assert_eq!(fills.len(), 8);
+        assert!(fills.contains(&Planet::Neptune.at(1)));
+        assert!(fills.contains(&Hue::Xenon.at(600)));
+        assert!(fills.contains(&Hue::Purple.at(600)));
+    }
+
+    #[test]
+    fn a_title_always_gets_the_same_chip_colour() {
+        assert_eq!(chip_fill("Rune layout"), chip_fill("Rune layout"));
+        let distinct: std::collections::HashSet<String> = ["a", "b", "c", "d", "e"]
+            .map(|t| chip_fill(t).hex())
+            .into_iter()
+            .collect();
+        assert!(distinct.len() > 1);
+    }
 }

@@ -2,7 +2,6 @@
   {"t": 2.3, "type": "tap", "key": "agent-mock-shopping"},
   {"t": 3.5, "type": "tap", "key": "starter-0"},
   {"t": 4.7, "type": "tap", "key": "send"},
-  {"t": 9.0, "type": "tap", "key": "tools"},
   {"t": 10.0, "type": "tap", "key": "tool-search_tool"},
   {"t": 12.0, "type": "tap", "key": "hit-search_tool-0"},
   {"t": 15.0, "type": "key", "name": "Escape"},

@@ -194,7 +194,6 @@ dependencies = [
  "rune-kit",
  "rune-knobs",
  "rune-notify",
- "rune-theme-opencode",
  "serde",
  "serde_json",
  "tracing",
@@ -2956,16 +2955,6 @@ version = "0.0.1"
 source = "git+https://github.com/anomalyco/rune.git?rev=04b38ae0a73bda03f010e97d2fff540ab91f67b0#04b38ae0a73bda03f010e97d2fff540ab91f67b0"
 dependencies = [
  "taffy",
-]
-
-[[package]]
-name = "rune-theme-opencode"
-version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune.git?rev=04b38ae0a73bda03f010e97d2fff540ab91f67b0#04b38ae0a73bda03f010e97d2fff540ab91f67b0"
-dependencies = [
- "rune",
- "rune-kit",
- "serde_json",
 ]
 
 [[package]]

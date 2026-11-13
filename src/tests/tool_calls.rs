@@ -174,7 +174,6 @@ fn a_later_success_of_the_same_tool_clears_its_failure() {
 #[test]
 fn a_failed_tool_row_says_it_failed_and_shows_why_when_opened() {
     let (mut rt, id) = failed_tool_chat();
-    rt.update(|s, _| s.toggle_tools_open(&id));
     rt.frame(1.0 / 60.0);
     assert!(
         rt.find("tool-failed-facet_tool").is_some(),
@@ -232,4 +231,124 @@ fn cmd_k_toggles_the_command_bar() {
     });
     rt.frame(0.0);
     assert!(!rt.state.command_bar.open);
+}
+
+#[test]
+fn a_search_call_reads_as_a_step_with_its_index_and_query() {
+    let mut rt = test_chat();
+    rt.update(|s, _| crate::scenes::tools(s));
+    rt.frame(1.0 / 60.0);
+    let row = "tool-algolia_search_index_products_markdown";
+    assert!(
+        shows_text(&rt, "Searched products_markdown", row),
+        "the index, not the raw tool name"
+    );
+    assert!(
+        shows_text(&rt, "wide running shoes", row),
+        "the query beside it"
+    );
+    assert!(!shows_text(&rt, "Called tool", row));
+}
+
+#[test]
+fn search_results_list_the_first_three_hits_until_show_all() {
+    let mut rt = test_chat_sized((720.0, 900.0));
+    rt.update(|s, _| crate::scenes::tools(s));
+    rt.frame(1.0 / 60.0);
+    assert!(
+        shows_text(&rt, "5 results", "tool-search_tool"),
+        "the step counts its hits"
+    );
+    for i in 0..3 {
+        assert!(
+            rt.find(&format!("hit-search_tool-{i}")).is_some(),
+            "hit {i} shows"
+        );
+    }
+    assert!(
+        rt.find("hit-search_tool-3").is_none(),
+        "the rest wait behind Show all"
+    );
+    assert!(shows_text(
+        &rt,
+        "Show all 5 results",
+        "hits-more-search_tool"
+    ));
+
+    tap(&mut rt, "hits-more-search_tool");
+    rt.frame(1.0 / 60.0);
+    assert!(
+        rt.find("hit-search_tool-4").is_some(),
+        "Show all lists every hit"
+    );
+    assert!(shows_text(&rt, "Show fewer", "hits-more-search_tool"));
+}
+
+#[test]
+fn a_result_row_shows_a_plain_excerpt_not_the_markdown() {
+    let mut rt = test_chat();
+    rt.update(|s, _| crate::scenes::tools(s));
+    rt.frame(1.0 / 60.0);
+    assert!(shows_text(
+        &rt,
+        "The current best shoe and insole pairings",
+        "hit-search_tool-0"
+    ));
+    assert!(
+        !shows_text(&rt, "Updated for the 2026 season", "hit-search_tool-0"),
+        "a snippet's heading is metadata, left out of the excerpt"
+    );
+}
+
+#[test]
+fn a_cards_leading_icon_is_the_tool_wrench_not_a_second_magnifying_glass() {
+    let tool = |name: &str, error: Option<&str>| ToolCall {
+        name: name.into(),
+        input: Some(SEARCH_ARGS.into()),
+        open: false,
+        request: None,
+        error: error.map(String::from),
+    };
+    let glyph = |t: &ToolCall| crate::conversation::step_glyph(t).name;
+    assert_eq!(
+        glyph(&tool("algolia_search_index_products", None)),
+        crate::satellite::icons::WRENCH.name
+    );
+    assert_ne!(
+        glyph(&tool("search_tool", None)),
+        crate::satellite::icons::SEARCH.name,
+        "the search action keeps the only magnifying glass"
+    );
+    assert_eq!(
+        glyph(&tool("algolia_search_index_products", Some("boom"))),
+        "lucide-circle-alert"
+    );
+}
+
+const SEARCH_ARGS: &str = r#"{"query": "shoes"}"#;
+
+#[test]
+fn a_steps_results_sit_inside_its_card_under_its_header() {
+    let mut rt = test_chat();
+    rt.update(|s, _| crate::scenes::tools(s));
+    settle(&mut rt);
+    let rect = |rt: &Runtime<Chat>, key: &str| rt.presented(key).map(|(r, _)| r).expect(key);
+    let card = rect(&rt, "tool-step-search_tool");
+    let header = rect(&rt, "tool-search_tool");
+    let hit = rect(&rt, "hit-search_tool-0");
+    let inside = |r: [f32; 4]| {
+        r[0] >= card[0] - 0.5
+            && r[0] + r[2] <= card[0] + card[2] + 0.5
+            && r[1] >= card[1] - 0.5
+            && r[1] + r[3] <= card[1] + card[3] + 0.5
+    };
+    assert!(inside(header) && inside(hit), "one surface holds the step");
+    assert!(
+        (header[2] - hit[2]).abs() < 0.5,
+        "the header and results share the card's width"
+    );
+    assert!(
+        hit[1] >= header[1] + header[3] - 0.5,
+        "results follow the header"
+    );
 }

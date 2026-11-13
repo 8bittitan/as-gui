@@ -42,7 +42,6 @@ pub fn playground() -> Playground<Chat> {
         .variant("tools", "Collapsed", |s| {
             for session in &mut s.sessions {
                 for m in &mut session.messages {
-                    m.tools_open = false;
                     for t in &mut m.tools {
                         t.open = false;
                     }

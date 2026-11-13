@@ -10,7 +10,7 @@ It is written in Rust on the [Rune](https://github.com/anomalyco/rune) UI framew
 
 - Streaming replies with markdown, copy, retry and thumbs up or down.
 - Tool calls shown with their JSON input and output, and a timeline of how long each step took.
-- Search hits as cards. Click one to read the whole record.
+- Each tool call is one card: what it searched and found, with its results beneath. Click one to read the whole record.
 - "Search it yourself": re-run an agent's query against the index, edit its parameters, and copy it as a curl command.
 - Several Algolia applications, each with its own color, and a command bar (⌘K) for switching agents, applications and conversations.
 - Quick Ask, a launcher panel for one-off questions (⌘⇧Space), and Ask about selection (⌘⇧A), which quotes the text selected in the app in front.
@@ -105,3 +105,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [ARCHITE
 ## License
 
 [MIT](LICENSE)
+
+The bundled Fira Code font is under the SIL Open Font License, in [assets/fonts/FiraCode-OFL.txt](assets/fonts/FiraCode-OFL.txt). The icons are from [Lucide](https://lucide.dev), under the ISC license.

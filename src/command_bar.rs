@@ -2,9 +2,10 @@
 //! switch agent or application, jump to a conversation, start a session, change appearance,
 //! open settings. `entries` is the pure core; `impl Chat` here runs them; `overlay` draws it.
 
+use crate::satellite::typography::{BODY, SUBHEADING};
+use crate::satellite::{RADIUS_CONTROL, icons};
 use rune::{El, Key, KeyEvent, ScrollSpec, TextEdit, Tx, col, el, icon, row, text, text_input};
 use rune_kit::Badge;
-use rune_theme_opencode::icons;
 
 use crate::agent::AgentStatus;
 use crate::chat::{Accent, Chat, ChatWidth, MOCK_AVAILABLE, ThemePref};
@@ -437,17 +438,17 @@ fn result_row(k: &rune_kit::Kit, i: usize, entry: &Entry, selected: bool, total:
         .position_in_set(i + 1, total)
         .focus_selected(selected)
         .w_full()
-        .min_h(34.0)
-        .px(10.0)
-        .gap(10.0)
+        .min_h(36.0)
+        .px(12.0)
+        .gap(12.0)
         .center_y()
-        .radius(8.0)
+        .radius(RADIUS_CONTROL)
         .hover(k.c.hover)
         .on_hover(move |s: &mut Chat| s.command_bar.selected = i)
         .on_press(move |s: &mut Chat| s.run_command_at(i))
         .child(labels);
     if selected {
-        result = result.fill(k.c.pressed);
+        result = result.fill(k.c.layer_02);
     }
     if !entry.hint.is_empty() {
         result = result.child(key_cap(k, &entry.hint));
@@ -459,13 +460,14 @@ fn result_row(k: &rune_kit::Kit, i: usize, entry: &Entry, selected: bool, total:
 }
 
 fn group_header(k: &rune_kit::Kit, group: Group) -> El {
-    text(group.label())
+    text(group.label().to_uppercase())
         .key(format!("command-bar-group-{}", group.label()))
-        .font(k.ty.small)
+        .label(group.label())
+        .font(SUBHEADING)
         .color(k.c.text_muted)
-        .px(10.0)
-        .pt(8.0)
-        .pb(2.0)
+        .px(12.0)
+        .pt(12.0)
+        .pb(4.0)
 }
 
 fn result_list(k: &rune_kit::Kit, found: &[Entry], selected: usize) -> El {
@@ -474,15 +476,15 @@ fn result_list(k: &rune_kit::Kit, found: &[Entry], selected: usize) -> El {
         .role("listbox")
         .label("Results")
         .w_full()
-        .padding(6.0);
+        .padding(8.0);
     if found.is_empty() {
         return list.child(
             text("No results")
                 .key("command-bar-empty")
-                .font(k.ty.ui)
+                .font(BODY)
                 .color(k.c.text_muted)
-                .px(10.0)
-                .py(10.0),
+                .px(12.0)
+                .py(12.0),
         );
     }
     let mut previous = None;
@@ -506,7 +508,7 @@ pub fn overlay(s: &Chat, k: &rune_kit::Kit, layer: &mut Vec<El>) {
         Some(Group::Agents) => "Switch agent…",
         _ => "Type a command or search…",
     };
-    let mut field = text_input(&s.command_bar.query, k.ty.ui)
+    let mut field = text_input(&s.command_bar.query, BODY)
         .key(FIELD)
         .grow(1.0)
         .min_w(0.0)
@@ -523,11 +525,12 @@ pub fn overlay(s: &Chat, k: &rune_kit::Kit, layer: &mut Vec<El>) {
     let mut header = row()
         .key("command-bar-header")
         .w_full()
-        .px(14.0)
-        .py(10.0)
-        .gap(10.0)
+        .min_h(56.0)
+        .px(16.0)
+        .py(8.0)
+        .gap(12.0)
         .center_y()
-        .child(icon(&icons::MAGNIFYING_GLASS, 16.0).color(k.c.icon_muted));
+        .child(icon(&icons::SEARCH, 16.0).color(k.c.icon_muted));
     if let Some(scope) = s.command_bar.scope {
         header = header.child(Badge::new(scope.label()).build(k).key("command-bar-scope"));
     }
