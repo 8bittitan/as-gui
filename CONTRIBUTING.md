@@ -4,7 +4,7 @@ Thanks for taking an interest. This page covers setting up, the checks a change 
 
 ## Set up
 
-The easiest way to get the tools is [mise](https://mise.jdx.dev). Run `mise install` in the repository root and it installs the Rust toolchain and `just` at the versions `mise.toml` pins.
+The easiest way to get the tools is [mise](https://mise.jdx.dev). Run `mise install` in the repository root and it installs the Rust toolchain, `just` and `git-cliff` at the versions `mise.toml` pins.
 
 Without mise, install [rustup](https://rustup.rs) and [just](https://github.com/casey/just). `rust-toolchain.toml` pins the Rust version and rustup installs it on the first build.
 
@@ -24,6 +24,8 @@ You do not need an Algolia account to work on the app. A debug build started wit
 | `just build` | Release build without the tuning panel. |
 | `just bundle` | Build `target/bundle/Agent Studio GUI.app`. |
 | `just dmg` | Build the app and a disk image. |
+| `just changelog` | Refresh the Unreleased section of `CHANGELOG.md` from the commits since the last tag. |
+| `just release <version>` | Cut a release: checks, version bump, changelog, commit and tag. |
 
 Run a single test with `cargo test <name>`.
 
@@ -79,10 +81,12 @@ The menu bar and selection scripts share the painted menu bar in `scripts/menu-b
 
 ## Releasing
 
-1. Raise `version` in `Cargo.toml` and commit.
-2. Push a tag that starts with `v`, for example `v0.1.0`.
+1. Run `just release 0.2.0` with the version you want. The script refuses a dirty working tree, runs `just check`, raises `version` in `Cargo.toml` and `Cargo.lock`, writes the version's section into `CHANGELOG.md`, and commits and tags `v0.2.0`.
+2. `git push && git push --tags`.
 
-`.github/workflows/release.yml` runs the checks, builds the disk image and writes a SHA-256 checksum in a job that can only read the repository. A second job, which has write access and runs no repository code, publishes both files to a GitHub release.
+`CHANGELOG.md` is generated from the commit messages by [git-cliff](https://git-cliff.org), so write conventional commits: `feat` for a feature, `fix` for a bug fix, and `feat!` or a `BREAKING CHANGE` footer for something breaking. `just changelog` refreshes the Unreleased section at any point, so the changelog is current between releases.
+
+`.github/workflows/release.yml` runs the checks, builds the disk image, writes a SHA-256 checksum and takes the release notes from the tag's section in `CHANGELOG.md`, in a job that can only read the repository. A second job, which has write access and runs no repository code, publishes both files to a GitHub release.
 
 To build the same files locally, run `just dmg`. They land in `target/bundle/`. The app is signed ad hoc. Notarizing it needs a paid Apple Developer ID and is not set up.
 

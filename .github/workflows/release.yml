@@ -15,19 +15,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - run: rustup show
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+        with:
+          tool: git-cliff@2.14.2
       - run: just check
       - run: just dmg
       - name: Write the checksum
         working-directory: target/bundle
         run: shasum -a 256 *.dmg > SHA256SUMS
+      - name: Write the release notes
+        run: git cliff --latest --strip all > release-notes.md
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release
           path: |
             target/bundle/*.dmg
             target/bundle/SHA256SUMS
+            release-notes.md
           if-no-files-found: error
 
   publish:
@@ -40,7 +47,7 @@ jobs:
         with:
           name: release
           path: dist
-      - run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes
+      - run: gh release create "$GITHUB_REF_NAME" dist/*.dmg dist/SHA256SUMS --verify-tag --notes-file dist/release-notes.md
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

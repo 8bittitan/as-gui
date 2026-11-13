@@ -37,3 +37,9 @@ screenshots:
   AS_GUI_DEMO=1 cargo run --release --locked --no-default-features -- --snap docs/conversation.png --scene conversation --size 1100x720 --theme light
   AS_GUI_DEMO=1 cargo run --release --locked --no-default-features -- --snap docs/search-panel.png --scene search --size 1100x720 --theme light
   AS_GUI_DEMO=1 cargo run --release --locked --no-default-features -- --snap docs/command-bar.png --scene command-bar --size 1100x720 --theme light
+
+changelog:
+  git cliff -u -o CHANGELOG.md
+
+release version:
+  scripts/release.sh "{{version}}"
