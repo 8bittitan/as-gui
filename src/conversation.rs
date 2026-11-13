@@ -429,7 +429,7 @@ pub(crate) fn step_glyph(tool: &ToolCall) -> &'static rune::Icon {
 }
 
 /// What a call did, in words: the index it searched, or the tool it ran.
-fn step_label(tool: &ToolCall) -> String {
+pub(crate) fn step_label(tool: &ToolCall) -> String {
     match crate::agent::index_from_tool_name(&tool.name) {
         Some(index) => format!("Searched {index}"),
         None => format!("Ran {}", tool.name),
@@ -874,7 +874,7 @@ fn json_tokens(json: &str) -> Vec<(usize, usize, JsonToken)> {
     tokens
 }
 
-fn json_spans(json: &str, k: &rune_kit::Kit) -> Vec<Span> {
+pub(crate) fn json_spans(json: &str, k: &rune_kit::Kit) -> Vec<Span> {
     json_tokens(json)
         .into_iter()
         .map(|(start, end, token)| {

@@ -67,7 +67,7 @@ The rules come from treating a seam as the place where behavior can change witho
 
 ### Quick Ask and selection
 
-- `quick_ask.rs`: the launcher panel, a second non-activating window. It reads the agent, theme and accent from a snapshot that `Chat` publishes on every change, streams one question, and can promote the exchange into the main window.
+- `quick_ask.rs`: the launcher panel, a second non-activating window. It reads the agent, theme and accent from a snapshot that `Chat` publishes on every change, streams one question, shows the agent's tool calls as cards and the settled reply's copy and feedback actions, and can promote the exchange into the main window.
 - `selection.rs`: what Ask about selection quotes. `copy_and_restore` is a pure algorithm over a `Desktop` trait. Without Accessibility access it reads the clipboard. With it, it saves the pasteboard, sends ⌘C, waits for the change count to move, reads the text and restores the pasteboard. A clipboard marked secret is never quoted. `selection/mac.rs` is the AppKit side.
 
 ### Platform and support

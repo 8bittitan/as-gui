@@ -9,7 +9,7 @@ use rune::{App, AppSpec, Env, Key, KeyEvent, Mods, Runtime};
 use crate::agent::AgentSnapshot;
 use crate::agent::{
     AgentInfo, AgentStatus, ChatMessage, IndexSearch, MockAgent, MockDirectory, Role, SearchPage,
-    SessionInfo, StreamEvent, ToolCall, TraceSpan, TurnTrace, parse_search_page,
+    SessionInfo, StreamEvent, ToolCall, TraceSpan, TurnTrace, mock_tools, parse_search_page,
 };
 use crate::chat::{self, Accent, Chat, ChatWidth, Session, ThemePref};
 #[cfg(feature = "knobs")]
@@ -200,6 +200,11 @@ fn settle(rt: &mut Runtime<Chat>) {
 }
 
 fn quick_ask() -> Runtime<QuickAsk> {
+    quick_ask_sized((480.0, 300.0))
+}
+
+/// A panel with room for a whole exchange on screen, as the real window's expanded height gives.
+fn quick_ask_sized(size: (f32, f32)) -> Runtime<QuickAsk> {
     let env = Env {
         system_dark: true,
         scale: 2.0,
@@ -217,7 +222,7 @@ fn quick_ask() -> Runtime<QuickAsk> {
     let mut rt = Runtime::new(
         QuickAsk::new(snapshot, None, None),
         quick_ask::view,
-        (480.0, 300.0),
+        size,
         env,
     );
     rt.poll = Some(quick_ask::poll);
@@ -249,6 +254,35 @@ impl crate::agent::AgentClient for HistoryRecorder {
             .lock()
             .unwrap()
             .push(history.iter().map(|m| (m.role, m.text.clone())).collect());
+        emit(StreamEvent::TextDelta("ok".into()));
+        Ok(())
+    }
+}
+
+/// An agent that remembers the feedback each vote sent.
+struct FeedbackRecorder {
+    votes: Arc<std::sync::Mutex<Vec<(String, String, i8)>>>,
+}
+
+impl crate::agent::AgentClient for FeedbackRecorder {
+    fn name(&self) -> &'static str {
+        "feedback-recorder"
+    }
+
+    fn send_feedback(&self, agent_id: &str, message_id: &str, vote: i8) -> Result<(), String> {
+        self.votes
+            .lock()
+            .unwrap()
+            .push((agent_id.to_string(), message_id.to_string(), vote));
+        Ok(())
+    }
+
+    fn stream(
+        &self,
+        _history: &[ChatMessage],
+        _conversation: Option<&str>,
+        emit: &mut dyn FnMut(StreamEvent),
+    ) -> Result<(), String> {
         emit(StreamEvent::TextDelta("ok".into()));
         Ok(())
     }

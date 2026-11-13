@@ -6,13 +6,15 @@ use std::sync::{Arc, Mutex};
 
 use crate::satellite::{self, Fit, icons, typography};
 use rune::{
-    AppHandle, Cx, El, Key, KeyEvent, ScrollSpec, TextEdit, Tx, Waker, col, el, icon, row, spacer,
-    text, text_input,
+    AppHandle, Cx, El, Key, KeyEvent, ScrollSpec, TextEdit, Tx, Waker, col, el, icon, rich, row,
+    spacer, text, text_input,
 };
-use rune_kit::{IconButton, IconButtonVariant, Markdown, Spinner};
+use rune_kit::{IconButton, IconButtonVariant, Markdown, Spinner, State};
 use tracing::warn;
 
-use crate::agent::{AgentSnapshot, ChatMessage, Role, StreamEvent, spawn_stream};
+use crate::agent::{
+    AgentSnapshot, ChatMessage, Role, SearchHit, StreamEvent, ToolCall, spawn_stream,
+};
 use crate::chat::Chat;
 use crate::palette::AppColour;
 use crate::selection::{Capture, NoSelection, Quote, SelectionSource, Source};
@@ -132,6 +134,67 @@ impl QuickAsk {
         self.asked_about.clear();
         self.error = None;
         tx.close_window();
+    }
+
+    /// Folds a tool event into the streaming reply, merging with the call of the same
+    /// name the way the main window's turn does.
+    fn merge_tool(&mut self, call: ToolCall) {
+        let Some(m) = self.messages.last_mut() else {
+            return;
+        };
+        match m.tools.iter_mut().find(|t| t.name == call.name) {
+            Some(t) if call.input.is_some() => {
+                if call.request.is_some() {
+                    t.request = call.request;
+                }
+                t.input = call.input;
+                t.error = None;
+            }
+            Some(t) if call.error.is_some() => t.error = call.error,
+            Some(_) => {}
+            None => m.tools.push(call),
+        }
+    }
+
+    /// Opens or closes a call card's payload.
+    pub fn toggle_tool_open(&mut self, message_id: &str, index: usize) {
+        if let Some(t) = self
+            .messages
+            .iter_mut()
+            .find(|m| m.id == message_id)
+            .and_then(|m| m.tools.get_mut(index))
+        {
+            t.open = !t.open;
+        }
+    }
+
+    /// Sends 👍/👎 for a reply to Agent Studio, best effort: only messages the server
+    /// persisted can take feedback, and a failed vote logs instead of interrupting.
+    pub fn vote(&mut self, message_id: &str, up: bool) {
+        let value: i8 = if up { 1 } else { 0 };
+        let Some(server_id) = self
+            .messages
+            .iter_mut()
+            .find(|m| m.id == message_id)
+            .and_then(|m| {
+                m.vote = Some(value);
+                m.server_id.clone()
+            })
+        else {
+            return;
+        };
+        let (client, agent_id) = {
+            let snapshot = self.snapshot.lock().unwrap_or_else(|p| p.into_inner());
+            (
+                std::sync::Arc::clone(&snapshot.client),
+                snapshot.agent_id.clone(),
+            )
+        };
+        std::thread::spawn(move || {
+            if let Err(e) = client.send_feedback(&agent_id, &server_id, value) {
+                warn!("feedback failed: {e}");
+            }
+        });
     }
 }
 
@@ -338,6 +401,31 @@ pub fn poll(s: &mut QuickAsk, t: f64, _: &mut Tx) -> bool {
                             m.server_id = Some(id);
                         }
                     }
+                    StreamEvent::ToolUsed(mut call) => {
+                        call.request = call.input.clone();
+                        s.merge_tool(call);
+                    }
+                    StreamEvent::ToolStarted { name, .. } => s.merge_tool(ToolCall {
+                        name,
+                        input: None,
+                        open: false,
+                        request: None,
+                        error: None,
+                    }),
+                    StreamEvent::ToolFailed { name, error, .. } => s.merge_tool(ToolCall {
+                        name,
+                        input: None,
+                        request: None,
+                        error: Some(error),
+                        open: false,
+                    }),
+                    StreamEvent::ToolFinished { name, output, .. } => s.merge_tool(ToolCall {
+                        name,
+                        input: output,
+                        open: false,
+                        request: None,
+                        error: None,
+                    }),
                     _ => {}
                 }
             }
@@ -596,22 +684,21 @@ fn promote_button(s: &QuickAsk, k: &rune_kit::Kit) -> El {
     promote.sized(k, satellite::Size::Small).key("qa-promote")
 }
 
-/// The question, then the reply as markdown (a single "Thinking…" until its first words),
-/// then any error, scrolling within the panel.
+/// The question, then the reply with its tool cards and actions (a single "Thinking…" until
+/// its first words), then any error, scrolling within the panel. The padding lives on the
+/// scrolled content, so its bottom clears the composer even scrolled hard down.
 fn transcript(s: &QuickAsk, k: &rune_kit::Kit) -> El {
-    let mut transcript = col()
-        .key("qa-transcript")
+    let mut content = col()
+        .key("qa-transcript-content")
         .w_full()
-        .max_h(320.0)
-        .padding(16.0)
-        .gap(24.0)
-        .scroll(ScrollSpec { stick_bottom: true });
-    for m in s
-        .messages
-        .iter()
-        .filter(|m| m.role == Role::User || m.streaming || !m.text.is_empty())
-    {
-        transcript = transcript.child(match m.role {
+        .pt(16.0)
+        .pb(24.0)
+        .px(16.0)
+        .gap(24.0);
+    for m in s.messages.iter().filter(|m| {
+        m.role == Role::User || m.streaming || !m.text.is_empty() || !m.tools.is_empty()
+    }) {
+        content = content.child(match m.role {
             Role::User => row()
                 .key(format!("qa-{}", m.id))
                 .w_full()
@@ -627,19 +714,34 @@ fn transcript(s: &QuickAsk, k: &rune_kit::Kit) -> El {
                 .center_y()
                 .child(Spinner::new().build(k))
                 .child(text("Thinking…").color(k.c.text_muted)),
-            Role::Assistant => col().key("qa-reply").w_full().min_w(0.0).child(
-                Markdown::new(m.text.clone())
-                    .style(crate::satellite::markdown(k))
-                    .streaming(m.streaming)
-                    .selectable(true)
-                    .build(k),
-            ),
+            Role::Assistant => {
+                let mut reply = col().key("qa-reply").w_full().min_w(0.0).gap(8.0);
+                if !m.tools.is_empty() {
+                    reply = reply.child(tools_section(k, m));
+                }
+                reply = reply.child(
+                    Markdown::new(m.text.clone())
+                        .style(crate::satellite::markdown(k))
+                        .streaming(m.streaming)
+                        .selectable(true)
+                        .build(k),
+                );
+                if !m.streaming && !m.text.is_empty() {
+                    reply = reply.child(message_actions(k, m));
+                }
+                reply
+            }
         });
     }
     if let Some(error) = &s.error {
-        transcript = transcript.child(error_callout(k, error));
+        content = content.child(error_callout(k, error));
     }
-    transcript
+    col()
+        .key("qa-transcript")
+        .w_full()
+        .max_h(320.0)
+        .scroll(ScrollSpec { stick_bottom: true })
+        .child(content)
 }
 
 /// The question as typed; a quoted one shows its instruction, the quote folded to one line
@@ -693,6 +795,215 @@ fn error_callout(k: &rune_kit::Kit, error: &str) -> El {
                 .grow(1.0)
                 .min_w(0.0),
         )
+}
+
+/// The calls the agent made before replying: one quiet card per call.
+fn tools_section(k: &rune_kit::Kit, m: &ChatMessage) -> El {
+    let mut cards = col().key("qa-tools").w_full().min_w(0.0).gap(8.0);
+    for (i, tool) in m.tools.iter().enumerate() {
+        cards = cards.child(tool_card(k, &m.id, i, tool));
+    }
+    cards
+}
+
+/// One call as one card: a header saying what it did and found and, opened, its payload or
+/// failure beneath on the same surface.
+fn tool_card(k: &rune_kit::Kit, message_id: &str, index: usize, tool: &ToolCall) -> El {
+    let expandable = tool.input.is_some() || tool.error.is_some();
+    let mut card = col()
+        .w_full()
+        .min_w(0.0)
+        .radius(satellite::RADIUS_CARD)
+        .fill(k.c.bg_base)
+        .border(1.0, k.c.border_base)
+        .clip_rounded(satellite::RADIUS_CARD)
+        .child(tool_header(k, message_id, index, tool, expandable));
+    if tool.open {
+        if let Some(input) = &tool.input {
+            card = card.child(
+                col()
+                    .key(format!("qa-tool-json-{}", tool.name))
+                    .w_full()
+                    .min_w(0.0)
+                    .max_h(320.0)
+                    .fill(k.c.layer_02)
+                    .border_sides([1.0, 0.0, 0.0, 0.0], k.c.border_base)
+                    .scroll(ScrollSpec {
+                        stick_bottom: false,
+                    })
+                    .child(
+                        col().w_full().px(12.0).py(8.0).child(
+                            rich(input, crate::conversation::json_spans(input, k))
+                                .font(typography::CODE)
+                                .wrap_anywhere()
+                                .color(k.c.text_muted),
+                        ),
+                    ),
+            );
+        }
+        if let Some(error) = &tool.error {
+            card = card.child(
+                row()
+                    .key(format!("qa-tool-error-{}", tool.name))
+                    .w_full()
+                    .px(12.0)
+                    .py(8.0)
+                    .gap(8.0)
+                    .fill(k.c.danger.bg)
+                    .border_sides([1.0, 0.0, 0.0, 0.0], k.c.border_base)
+                    .child(
+                        icon(&icons::CIRCLE_ALERT, 14.0)
+                            .color(k.c.danger.icon)
+                            .mt(3.0),
+                    )
+                    .child(
+                        text(error)
+                            .wrap()
+                            .grow(1.0)
+                            .min_w(0.0)
+                            .font(typography::CAPTION)
+                            .color(k.c.danger.fg),
+                    ),
+            );
+        }
+    }
+    card
+}
+
+/// A call card's header: what it did, the query and what came back, then the disclosure,
+/// all on one line.
+fn tool_header(
+    k: &rune_kit::Kit,
+    message_id: &str,
+    index: usize,
+    tool: &ToolCall,
+    expandable: bool,
+) -> El {
+    let id = message_id.to_string();
+    let name = tool.name.clone();
+    let failed = tool.error.is_some();
+    let glyph = crate::conversation::step_glyph(tool);
+    let label = crate::conversation::step_label(tool);
+    let mut facts: Vec<El> = Vec::new();
+    if let Some(query) = tool
+        .search_request()
+        .as_ref()
+        .filter(|q| !q.query.is_empty())
+    {
+        facts.push(
+            text(format!("\u{201c}{}\u{201d}", query.query))
+                .font(k.ty.ui)
+                .color(k.c.text_muted)
+                .truncate(),
+        );
+    }
+    if let Some(hits) = tool.input.as_deref().and_then(SearchHit::from_json) {
+        let n = hits.len();
+        facts.push(
+            text(if n == 1 {
+                "1 result".to_string()
+            } else {
+                format!("{n} results")
+            })
+            .font(k.ty.ui)
+            .color(k.c.text_muted),
+        );
+    }
+    if failed {
+        facts.push(text("Failed").font(k.ty.ui).color(k.c.danger.fg));
+    }
+    let mut header = row()
+        .key(format!("qa-tool-{}", tool.name))
+        .role("button")
+        .label(&label)
+        .w_full()
+        .min_w(0.0)
+        .min_h(32.0)
+        .pl(12.0)
+        .pr(8.0)
+        .gap(8.0)
+        .center_y()
+        .child(icon(glyph, 14.0).color(if failed {
+            k.c.danger.icon
+        } else {
+            k.c.icon_muted
+        }))
+        .child(text(&label).font(k.ty.ui_medium).color(k.c.text_base));
+    for fact in facts {
+        header = header
+            .child(text("·").font(k.ty.ui).color(k.c.text_faint).a11y_hidden())
+            .child(fact);
+    }
+    if expandable {
+        header = header.child(spacer()).child(icon(
+            if tool.open {
+                k.glyph.chevron_down
+            } else {
+                k.glyph.caret_right
+            },
+            14.0,
+        ));
+        header = header
+            .hover(k.c.hover)
+            .on_press_tx(move |s: &mut QuickAsk, tx: &mut Tx| {
+                s.toggle_tool_open(&id, index);
+                tx.keep_on_screen(format!("qa-tool-{name}"));
+            });
+    }
+    header
+}
+
+/// The quiet action row under a settled reply: copy and a vote. Votes go to Agent Studio
+/// only for messages the server persisted.
+fn message_actions(k: &rune_kit::Kit, m: &ChatMessage) -> El {
+    let id = m.id.clone();
+    let reply = m.text.clone();
+    let voted = m.vote;
+    let mut actions = row().key(format!("qa-actions-{}", m.id)).gap(4.0).child(
+        IconButton::new(k.glyph.copy)
+            .variant(IconButtonVariant::GhostMuted)
+            .label("Copy reply")
+            .on_press_tx(move |_: &mut QuickAsk, tx: &mut Tx| tx.copy(reply.clone()))
+            .sized(k, satellite::Size::Small)
+            .key(format!("qa-copy-{}", m.id)),
+    );
+    if m.server_id.is_some() {
+        actions = actions.child(
+            IconButton::new(&icons::THUMBS_UP)
+                .variant(IconButtonVariant::GhostMuted)
+                .label("Good reply")
+                .disabled(voted.is_some())
+                .state(if voted == Some(1) {
+                    State::Pressed
+                } else {
+                    State::Rest
+                })
+                .on_press({
+                    let id = id.clone();
+                    move |s: &mut QuickAsk| s.vote(&id, true)
+                })
+                .sized(k, satellite::Size::Small)
+                .key(format!("qa-up-{}", m.id)),
+        );
+        actions = actions.child(
+            IconButton::new(&icons::THUMBS_DOWN)
+                .variant(IconButtonVariant::GhostMuted)
+                .label("Bad reply")
+                .disabled(voted.is_some())
+                .state(if voted == Some(0) {
+                    State::Pressed
+                } else {
+                    State::Rest
+                })
+                .on_press({
+                    let id = id.clone();
+                    move |s: &mut QuickAsk| s.vote(&id, false)
+                })
+                .sized(k, satellite::Size::Small)
+                .key(format!("qa-down-{}", m.id)),
+        );
+    }
+    actions
 }
 
 /// "Powered by Algolia" under the composer; it links to algolia.com.
@@ -751,6 +1062,7 @@ pub fn scene(s: &mut QuickAsk) {
     reply.text = "The new season adds the **Aero 2** and a wider fit:\n\n- Cushioned Series\n- Two trail options".into();
     reply.streaming = false;
     reply.server_id = Some("alg_cnv_demo".into());
+    reply.tools = crate::agent::mock_tools();
     s.messages.push(reply);
 }
 

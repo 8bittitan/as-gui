@@ -330,6 +330,152 @@ fn choosing_an_agent_publishes_it_to_the_quick_ask_snapshot() {
 }
 
 #[test]
+fn a_quick_ask_shows_the_tools_the_agent_ran() {
+    let mut rt = quick_ask_sized((480.0, 480.0));
+    rt.state.snapshot.lock().unwrap().client = Arc::new(MockAgent {
+        response: "Quick answer",
+        chunk_chars: 4,
+        tools: mock_tools(),
+    });
+    rt.update(|s, _| s.composer.insert("What is new?"));
+    rt.update(quick_ask::ask);
+    settle_quick_ask(&mut rt);
+    for _ in 0..90 {
+        rt.frame(1.0 / 60.0);
+    }
+    assert!(
+        rt.find("qa-tool-load_skill_tool").is_some(),
+        "each call draws its card in the panel"
+    );
+    let names: Vec<String> = rt
+        .elements()
+        .iter()
+        .filter_map(|e| e.text.clone())
+        .collect();
+    assert!(
+        names.iter().any(|t| t == "Ran load_skill_tool"),
+        "the header says what the call did: {names:?}"
+    );
+
+    tap(&mut rt, "qa-tool-schedule_task_tool");
+    rt.frame(1.0 / 60.0);
+    assert!(
+        rt.find("qa-tool-json-schedule_task_tool").is_some(),
+        "tapping the header opens the call's payload"
+    );
+}
+
+#[test]
+fn a_quick_ask_shows_a_tool_only_reply_that_never_says_a_word() {
+    let rt = quick_ask_with(
+        |m| {
+            m.streaming = false;
+            m.tools = mock_tools();
+        },
+        false,
+    );
+    assert!(
+        rt.find("qa-tool-load_skill_tool").is_some(),
+        "the calls show even when the reply has no text"
+    );
+    assert!(
+        rt.find("qa-copy-qa2").is_none(),
+        "nothing to copy, no copy action"
+    );
+}
+
+#[test]
+fn the_quick_ask_reply_carries_copy_and_feedback_actions() {
+    let rt = quick_ask_with(
+        |m| {
+            m.streaming = false;
+            m.text = "Quick answer".into();
+            m.server_id = Some("alg_msg_1".into());
+        },
+        false,
+    );
+    assert!(rt.find("qa-copy-qa2").is_some(), "copy is there");
+    assert!(rt.find("qa-up-qa2").is_some(), "👍 is there");
+    assert!(rt.find("qa-down-qa2").is_some(), "👎 is there");
+}
+
+#[test]
+fn a_quick_ask_reply_the_server_never_persisted_skips_the_vote() {
+    let rt = quick_ask_with(
+        |m| {
+            m.streaming = false;
+            m.text = "Quick answer".into();
+        },
+        false,
+    );
+    assert!(rt.find("qa-copy-qa2").is_some(), "copy still is there");
+    assert!(rt.find("qa-up-qa2").is_none(), "no id, no 👍");
+    assert!(rt.find("qa-down-qa2").is_none(), "no id, no 👎");
+}
+
+#[test]
+fn voting_in_the_quick_ask_sends_feedback_for_the_reply() {
+    let votes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut rt = quick_ask_sized((480.0, 480.0));
+    rt.state.snapshot.lock().unwrap().client = Arc::new(FeedbackRecorder {
+        votes: Arc::clone(&votes),
+    });
+    rt.update(|s, _| {
+        s.messages.push(ChatMessage::user("qa1", "What is new?"));
+        let mut m = ChatMessage::assistant("qa2");
+        m.streaming = false;
+        m.text = "Quick answer".into();
+        m.server_id = Some("alg_msg_1".into());
+        s.messages.push(m);
+    });
+    rt.update(quick_ask::shown);
+    for _ in 0..90 {
+        rt.frame(1.0 / 60.0);
+    }
+    tap(&mut rt, "qa-up-qa2");
+    rt.frame(1.0 / 60.0);
+    let recorded = |votes: &std::sync::Mutex<Vec<(String, String, i8)>>| {
+        for _ in 0..100 {
+            if !votes.lock().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        votes.lock().unwrap().clone()
+    };
+    assert_eq!(
+        recorded(&votes),
+        vec![("a1".to_string(), "alg_msg_1".to_string(), 1)],
+        "the vote goes to Agent Studio for the persisted reply"
+    );
+    assert_eq!(rt.state.messages[1].vote, Some(1), "and shows as voted");
+}
+
+#[test]
+fn the_quick_ask_reply_clears_the_composer_divider() {
+    let mut rt = quick_ask_with(
+        |m| {
+            m.streaming = false;
+            m.text = "A long reply.\n\n".repeat(30);
+        },
+        false,
+    );
+    rt.update(quick_ask::shown);
+    for _ in 0..90 {
+        rt.frame(1.0 / 60.0);
+    }
+    let reply_bottom = rt
+        .presented("qa-actions-qa2")
+        .map(|(r, _)| r[1] + r[3])
+        .expect("the actions are on screen");
+    let composer_top = rt.presented("qa-composer").map(|(r, _)| r[1]).unwrap();
+    assert!(
+        composer_top - reply_bottom >= 20.0,
+        "the last message does not crowd the composer: {reply_bottom} under {composer_top}"
+    );
+}
+
+#[test]
 fn hiding_a_session_removes_it_from_the_sidebar_and_keeps_its_data() {
     let mut rt = test_chat();
     rt.update(|s, _| s.selected_agent = Some(agent_one()));
