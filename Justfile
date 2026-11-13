@@ -38,6 +38,19 @@ screenshots:
   AS_GUI_DEMO=1 cargo run --release --locked --no-default-features -- --snap docs/search-panel.png --scene search --size 1100x720 --theme light
   AS_GUI_DEMO=1 cargo run --release --locked --no-default-features -- --snap docs/command-bar.png --scene command-bar --size 1100x720 --theme light
 
+# Builds the benchmark binary (release codegen, non-incremental).
+bench-build:
+  cargo build --profile perf --locked --no-default-features
+
+# Replays scripts/bench.json headlessly and prints Rune's per-frame CPU stats.
+bench-frames: bench-build
+  AS_GUI_DEMO=1 target/perf/as-gui --script scripts/bench.json
+
+# Times process startup: launch to settled first frame of the conversation scene.
+bench-startup: bench-build
+  AS_GUI_DEMO=1 hyperfine --warmup 1 --runs 7 \
+    "target/perf/as-gui --snap target/perf/bench-startup.png --scene conversation --size 1100x720"
+
 changelog:
   git cliff -u -o CHANGELOG.md
 
