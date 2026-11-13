@@ -29,6 +29,7 @@ jobs:
       - name: Lint and test with the knobs panel (default features)
         run: |
           cargo clippy --all-targets --locked -- -D warnings
+          cargo clippy --all-targets --locked --features bench -- -D warnings
           cargo test --locked
       - name: Lint and test the shipped configuration (no knobs panel)
         run: |

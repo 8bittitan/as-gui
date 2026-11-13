@@ -9,6 +9,8 @@
 //! `logs/as-gui.log.YYYY-MM-DD`; default `warn`). Headless: `cargo run -- --tree tree.json`.
 
 mod agent;
+#[cfg(feature = "bench")]
+pub mod bench;
 mod brand;
 mod chat;
 mod command_bar;
