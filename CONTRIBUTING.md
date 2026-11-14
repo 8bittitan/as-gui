@@ -25,7 +25,7 @@ You do not need an Algolia account to work on the app. A debug build started wit
 | `just bundle` | Build `target/bundle/Agent Studio GUI.app`. |
 | `just dmg` | Build the app and a disk image. |
 | `just changelog` | Refresh the Unreleased section of `CHANGELOG.md` from the commits since the last tag. |
-| `just release <version>` | Cut a release: checks, version bump, changelog, commit and tag. |
+| `just release <major\|minor\|patch>` | Cut a release: checks, version bump, changelog, commit and tag. |
 
 Run a single test with `cargo test <name>`.
 
@@ -95,7 +95,7 @@ The menu bar and selection scripts share the painted menu bar in `scripts/menu-b
 
 ## Releasing
 
-1. Run `just release 0.2.0` with the version you want. The script refuses a dirty working tree, runs `just check`, raises `version` in `Cargo.toml` and `Cargo.lock`, writes the version's section into `CHANGELOG.md`, and commits and tags `v0.2.0`.
+1. Run `just release major`, `just release minor` or `just release patch`. The script works out the next version from `version` in `Cargo.toml` (from 0.1.3, `minor` gives 0.2.0), refuses a dirty working tree, runs `just check`, raises `version` in `Cargo.toml` and `Cargo.lock`, writes the version's section into `CHANGELOG.md`, and commits and tags `v0.2.0`.
 2. `git push && git push --tags`.
 
 `CHANGELOG.md` is generated from the commit messages by [git-cliff](https://git-cliff.org), so write conventional commits: `feat` for a feature, `fix` for a bug fix, and `feat!` or a `BREAKING CHANGE` footer for something breaking. `just changelog` refreshes the Unreleased section at any point, so the changelog is current between releases.

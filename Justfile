@@ -66,5 +66,6 @@ bench-compare *args="":
 changelog:
   git cliff -u -o CHANGELOG.md
 
-release version:
-  scripts/release.sh "{{version}}"
+# Cuts a release by bumping the current version: major, minor or patch.
+release bump:
+  scripts/release.sh "{{bump}}"

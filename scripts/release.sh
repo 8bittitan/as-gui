@@ -1,38 +1,40 @@
 #!/usr/bin/env bash
 # Cuts a release: runs the checks, bumps the version in Cargo.toml and Cargo.lock,
 # writes the version's section into CHANGELOG.md, then commits and tags.
-# Usage: scripts/release.sh <version>   e.g. scripts/release.sh 0.2.0
+# Usage: scripts/release.sh <major|minor|patch>   e.g. scripts/release.sh minor
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+usage="usage: scripts/release.sh <major|minor|patch>   e.g. scripts/release.sh minor"
 if [[ $# -ne 1 ]]; then
-    echo "usage: scripts/release.sh <version>   e.g. scripts/release.sh 0.2.0" >&2
+    echo "$usage" >&2
     exit 1
 fi
-version="${1#v}"
-if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "not a semver version: $1" >&2
+
+current=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+if ! [[ "$current" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+    echo "the version in Cargo.toml is not plain semver: $current" >&2
     exit 1
 fi
+major=${BASH_REMATCH[1]} minor=${BASH_REMATCH[2]} patch=${BASH_REMATCH[3]}
+
+case "$1" in
+    major) version="$((major + 1)).0.0" ;;
+    minor) version="$major.$((minor + 1)).0" ;;
+    patch) version="$major.$minor.$((patch + 1))" ;;
+    *)
+        echo "not a bump: $1" >&2
+        echo "$usage" >&2
+        exit 1
+        ;;
+esac
 
 if [[ -n "$(git status --porcelain)" ]]; then
     echo "the working tree is dirty; commit or stash first" >&2
     exit 1
 fi
 
-current=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
-newer() {
-    local a=(${1//./ }) b=(${2//./ })
-    for i in 0 1 2; do
-        (( ${a[i]} < ${b[i]} )) && return 0
-        (( ${a[i]} > ${b[i]} )) && return 1
-    done
-    return 1
-}
-if ! newer "$version" "$current"; then
-    echo "$version does not come after the current version $current" >&2
-    exit 1
-fi
+echo "releasing v$version (was $current)"
 
 just check
 
