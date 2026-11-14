@@ -44,6 +44,6 @@ git cliff --unreleased --tag "v$version" -p CHANGELOG.md
 
 git add Cargo.toml Cargo.lock CHANGELOG.md
 git commit -m "chore(release): v$version"
-git tag "v$version"
+git tag -m "v$version" "v$version"
 
 echo "released v$version; publish with: git push && git push --tags"
