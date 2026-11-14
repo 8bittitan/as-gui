@@ -42,18 +42,26 @@ screenshots:
 bench-build:
   cargo build --profile perf --locked --no-default-features
 
-# Replays scripts/bench.json headlessly and prints Rune's per-frame CPU stats.
+# Replays scripts/bench.json headlessly and prints Rune's per-frame CPU stats; the summary also lands in target/perf/bench-frames.log for bench-save.
 bench-frames: bench-build
-  AS_GUI_DEMO=1 target/perf/as-gui --script scripts/bench.json
+  AS_GUI_DEMO=1 target/perf/as-gui --script scripts/bench.json 2>&1 | tee target/perf/bench-frames.log
 
-# Times process startup: launch to settled first frame of the conversation scene.
+# Times process startup: launch to settled first frame of the conversation scene; the numbers also land in target/perf/bench-startup.json for bench-save.
 bench-startup: bench-build
-  AS_GUI_DEMO=1 hyperfine --warmup 1 --runs 7 \
+  AS_GUI_DEMO=1 hyperfine --warmup 1 --runs 7 --export-json target/perf/bench-startup.json \
     "target/perf/as-gui --snap target/perf/bench-startup.png --scene conversation --size 1100x720"
 
 # Runs the instrumented frame benchmarks (per-scenario median/p95 of CPU, phases, allocations).
 bench *frame_bench_args="":
   cargo run --profile perf --locked --no-default-features --features bench --example frame_bench -- {{frame_bench_args}}
+
+# Runs all three benchmarks and saves one JSON record under benchmarks/results/. Refuses a dirty tree.
+bench-save:
+  scripts/bench-save.sh
+
+# Runs all three benchmarks and compares against the latest saved record (or --against <file>). Writes nothing.
+bench-compare *args="":
+  scripts/bench-compare.sh {{args}}
 
 changelog:
   git cliff -u -o CHANGELOG.md

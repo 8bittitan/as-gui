@@ -5,8 +5,11 @@
 //! cargo run --profile perf --locked --no-default-features --features bench --example frame_bench
 //!
 //! `--samples N` (default 7) sets how many measured passes each scenario gets; `--scenario
-//! NAME` runs one scenario instead of all five. The glow compositor is not in the draw path,
-//! so its shader cost is not measured.
+//! NAME` runs one scenario instead of all five; `--json <path>` writes the median/p95 table
+//! as the `frame_bench` section of a results record. The glow compositor is not in the draw
+//! path, so its shader cost is not measured.
+use std::collections::BTreeMap;
+
 use as_gui::bench::{self, Bench, METRICS};
 
 #[global_allocator]
@@ -33,8 +36,10 @@ fn main() {
         eprintln!("frame_bench: debug build; time a --profile perf build");
     }
     let mut bench = Bench::new();
+    let mut scenarios = BTreeMap::new();
     for scenario in chosen {
         let rows = scenario.sample(&mut bench, samples, FRAMES);
+        let mut metrics = BTreeMap::new();
         for (m, name) in METRICS.iter().enumerate() {
             let mut v: Vec<f64> = rows.iter().map(|r| r[m]).collect();
             let (median, p95) = (bench::median(&mut v), bench::p95(&mut v));
@@ -43,6 +48,17 @@ fn main() {
                 scenario.name(),
                 v.len()
             );
+            metrics.insert(
+                name.to_string(),
+                serde_json::json!({ "median": median, "p95": p95 }),
+            );
         }
+        scenarios.insert(scenario.name().to_string(), metrics);
+    }
+    if let Some(path) = value("--json") {
+        let doc =
+            serde_json::json!({ "samples": samples, "frames": FRAMES, "scenarios": scenarios });
+        let json = serde_json::to_string_pretty(&doc).expect("the frame bench section serialises");
+        std::fs::write(&path, json + "\n").unwrap_or_else(|e| panic!("{path}: {e}"));
     }
 }
