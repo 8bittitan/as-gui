@@ -49,7 +49,7 @@ The Rust version is pinned in both `rust-toolchain.toml` and `mise.toml`. Change
 
 ### Updating Rune
 
-The four Rune crates (`rune`, `rune-kit`, `rune-knobs`, `rune-notify`) are git dependencies pinned to one revision. Change `rev` in `Cargo.toml` on all four together. The theme is not a Rune crate. It is Satellite, built in `src/satellite.rs`. The `wgpu` version must also match the one Rune uses.
+The four Rune crates (`rune`, `rune-kit`, `rune-knobs`, `rune-notify`) are git dependencies pinned to one revision, and the optional `procwatch` (the benchmarks' counting allocator) comes from the same repo at the same revision. Change `rev` in `Cargo.toml` on all five together. The theme is not a Rune crate. It is Satellite, built in `src/satellite.rs`. The `wgpu` version must also match the one Rune uses.
 
 ## Checking the UI without a window
 
@@ -73,6 +73,7 @@ Three recipes measure performance. `just bench-build` compiles the benchmark bin
 
 - `just bench-frames` replays `scripts/bench.json` headlessly (pick agent, send a question, wait for the streamed reply, open a tool card, scroll, ⌘K with a query, settings theme switch) and prints Rune's per-frame CPU stats: update, build and encode/submit time per frame, without readback.
 - `just bench-startup` times process startup with [hyperfine](https://github.com/sharkdp/hyperfine) (one warmup, seven runs), using `--snap --scene conversation`, which runs fully offscreen and exits.
+- `just bench` runs the instrumented frame benchmarks: five deterministic cases in `benchmarks/cases/` (`idle`, `stream`, `tool-card`, `scroll`, `command-bar`), each sampled and reported as `METRIC scenario=.. metric=.. median=.. p95=..` lines for `commits`, `cpu_ms`, `frame_ms`, `encode_ms`, `view_ms`, `layout_ms` and `allocations`. `just bench -- --samples 3` is a quick pass; `--scenario <name>` runs one. The cases feed turn events through the `begin_turn` sender directly, so the mock agent's thread sleeps never touch the numbers. The glow compositor (`glow::Glow`) is not in the benchmark's draw path, so its shader cost is not measured.
 
 Numbers are only comparable on the same machine and the same Rune revision; `AS_GUI_DEMO=1` keeps the agent deterministic so the replays match across machines. Record baselines in pull requests so later changes can be compared against them.
 

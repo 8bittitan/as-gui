@@ -22,6 +22,8 @@ The rules come from treating a seam as the place where behavior can change witho
 
 ## Source map
 
+The crate is a library with a thin binary: `src/main.rs` calls `run()` in `src/lib.rs`, which builds the two windows; benchmarks in later phases drive the library directly.
+
 ### Agent client (`src/agent/`)
 
 - `model.rs`: messages, tool calls, turn traces, `StreamEvent`, agent and session info.

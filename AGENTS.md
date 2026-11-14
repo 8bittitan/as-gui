@@ -8,7 +8,7 @@ A single-crate Rust GUI for Algolia Agent Studio agents, built on the Rune UI fr
 - `just check` is the gate: `cargo fmt --check`, then `just lint` (clippy with `-D warnings`), then `just test`. Both of those run without the `knobs` feature. CI also runs `cargo clippy --all-targets -- -D warnings` and `cargo test` with the default features, so run those too before you call work done.
 - Single test: `cargo test <test_name>`. Parser and formatting tests are inline `#[cfg(test)]` modules. Tests that drive the whole app are in `src/tests/`.
 - The toolchain is pinned in both `rust-toolchain.toml` and `mise.toml` (which also pins `just`). Change them together. The manifest must stay `Cargo.toml`, because a lowercase `cargo.toml` broke tooling that looks it up by exact name.
-- The four Rune crates in `Cargo.toml` share one `rev`. Change all four together.
+- The five Rune crates in `Cargo.toml` (`rune`, `rune-kit`, `rune-knobs`, `rune-notify`, `procwatch`) share one `rev`. Change all five together.
 - Debug builds compile every dependency at `opt-level = 3` (`[profile.dev.package."*"]`). Unoptimized text shaping and glyph rasterising made the first frame that shows new text stall visibly, for example when a tool card opens. Keep that setting when you touch the profiles.
 
 ## Design rules in short

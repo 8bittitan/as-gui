@@ -1,6 +1,6 @@
 # Phase 2: Instrumented frame benchmark in the `pinch_bench` style
 
-**Status:** ready to implement (requires Phase 0 and Phase 1 landed)
+**Status:** done — landed as a single commit on branch `feat/phase-2-frame-bench`
 **Goal:** per-scenario frame benchmarks (CPU, view/layout phases, allocations, commits) reported as median/p95, using the exact instrumentation Rune itself uses: the `frame-profile` feature, `procwatch`'s counting allocator, and Rune's phase clocks.
 **Commit:** one commit (plus its tests written first, per the repo's TDD rule).
 
@@ -133,11 +133,32 @@ Record the `just bench` output in the PR as the first baseline, next to Phase 1'
 
 ## Definition of done
 
-- [ ] `procwatch` added at the shared rev; `AGENTS.md` says five Rune crates
-- [ ] `bench` feature wired to `rune/frame-profile`; example has `required-features`
-- [ ] `src/bench.rs` with median/p95 unit tests and one-frame scenario tests (written first)
-- [ ] Five scenarios implemented; all deterministic (no mock sleeps in the measured loop)
-- [ ] `just bench` prints `METRIC scenario=.. metric=.. median=.. p95=..` lines
-- [ ] CI compiles the bench feature via clippy
-- [ ] `CONTRIBUTING.md` updated; glow caveat documented
-- [ ] `just check` still passes; baseline recorded
+- [x] `procwatch` added at the shared rev; `AGENTS.md` says five Rune crates
+- [x] `bench` feature wired to `rune/frame-profile`; example has `required-features`
+- [x] `src/bench.rs` with median/p95 unit tests and one-frame scenario tests (written first)
+- [x] Five scenarios implemented; all deterministic (no mock sleeps in the measured loop)
+- [x] `just bench` prints `METRIC scenario=.. metric=.. median=.. p95=..` lines
+- [x] CI compiles the bench feature via clippy
+- [x] `CONTRIBUTING.md` updated; glow caveat documented (also in `src/bench.rs`'s module doc)
+- [x] `just check` still passes; baseline recorded
+
+## Baseline (dev Mac, 2026-11-13, Rune `04b38ae`, 7 samples × 120 frames)
+
+| scenario | cpu_ms median | cpu_ms p95 | commits | allocations |
+| --- | --- | --- | --- | --- |
+| idle | 0.1315 | 0.1461 | 0 | 33 |
+| stream | 0.3469 | 0.3576 | 1.0 | 1221 |
+| tool-card | 0.1855 | 0.1863 | 0.03 | 164 |
+| scroll | 0.4460 | 0.4582 | 0 | 46 |
+| command-bar | 0.5136 | 0.5617 | 0.67 | 1530 |
+
+Direction check: `idle` is the floor; `stream` carries a commit and ~1.2k allocations per frame; `scroll` commits nothing (live scroll path) but costs real CPU over 200 messages; `command-bar` is heaviest, with its view and encode re-running per keystroke.
+
+## Notes
+
+- `Scenario::new` is `pub(crate)`: `Chat` is private, so a public constructor taking `Runtime<Chat>` would trip the `private_interfaces` lint and leak the type. The public surface is `scenarios()`, `scenario(name)`, `name()`, `sample()`, `Bench`, `METRICS`, `median`, `p95`.
+- `sample` takes a shared `Bench` (one headless GPU for the whole run) rather than building one per call, so device and pipeline setup stay out of the numbers.
+- `just` doesn't treat `--` specially, so the recipe is variadic: `just bench --samples 3`, not `just bench -- --samples 3`.
+- `live_only_events` is printed for symmetry with `pinch_bench` even though no scenario uses live values yet (all zeros).
+- The TDD sequence caught two things while the tests were being written: the first `p95` expectation ignored Rune's nearest-rank rounding ((n−1)·0.95 for n=20 → 19.0, not 20.0), and `one_frame` initially never ran the scenario's step, so the stream/tool-card/command-bar tests failed until it did.
+- Follow-up restructures (same branch): the case definitions moved out of `src/bench.rs` into `benchmarks/cases/`, one file per case, compiled into the lib through a `#[path]` module so `Chat` stays private; the engine (Bench, Scenario, sampling, median/p95, the shared runtime builder and fixtures) stays in `src/bench.rs`. The runner then moved from `examples/frame_bench.rs` to `benchmarks/runners/frame_bench.rs`, with `[[example]] path` pointing at it, so `cargo run --example frame_bench` and `just bench` are unchanged.

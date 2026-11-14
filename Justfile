@@ -51,6 +51,10 @@ bench-startup: bench-build
   AS_GUI_DEMO=1 hyperfine --warmup 1 --runs 7 \
     "target/perf/as-gui --snap target/perf/bench-startup.png --scene conversation --size 1100x720"
 
+# Runs the instrumented frame benchmarks (per-scenario median/p95 of CPU, phases, allocations).
+bench *frame_bench_args="":
+  cargo run --profile perf --locked --no-default-features --features bench --example frame_bench -- {{frame_bench_args}}
+
 changelog:
   git cliff -u -o CHANGELOG.md
 
