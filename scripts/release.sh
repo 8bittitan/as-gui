@@ -46,4 +46,10 @@ git add Cargo.toml Cargo.lock CHANGELOG.md
 git commit -m "chore(release): v$version"
 git tag -m "v$version" "v$version"
 
-echo "released v$version; publish with: git push && git push --tags"
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    bold=$'\e[1m' green=$'\e[32m' reset=$'\e[0m'
+else
+    bold='' green='' reset=''
+fi
+
+echo "${green}released v$version${reset}; publish with: ${bold}git push --follow-tags${reset}"
