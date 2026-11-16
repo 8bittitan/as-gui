@@ -626,7 +626,7 @@ fn colours_missing_or_unknown_in_the_file_come_from_the_position() {
 }
 
 #[test]
-fn the_window_tint_shows_with_two_applications_and_the_setting_on() {
+fn the_window_tint_shows_with_the_setting_on() {
     let mut rt = two_apps();
     rt.update(|s, _| s.selected_agent = Some(agent_one()));
     rt.frame(0.0);
@@ -654,8 +654,8 @@ fn the_window_tint_shows_with_two_applications_and_the_setting_on() {
     });
     rt.frame(0.0);
     assert!(
-        rt.find("window-tint").is_none(),
-        "one application needs no telling apart"
+        rt.find("window-tint").is_some(),
+        "a single application is tinted too"
     );
 }
 

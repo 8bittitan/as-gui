@@ -429,11 +429,10 @@ impl Chat {
         }
     }
 
-    /// The colour of the window's top bar: only when there are applications to tell apart,
-    /// and the setting is on.
+    /// The colour of the window's tint: the active application's, when the setting is on.
     pub fn window_tint(&self) -> Option<AppColour> {
         let application = self.active.and_then(|i| self.applications.get(i))?;
-        (self.appearance.tint_window && self.applications.len() > 1).then_some(application.colour)
+        self.appearance.tint_window.then_some(application.colour)
     }
 
     /// Settings' swatch row for application `index`: chosen, it closes.

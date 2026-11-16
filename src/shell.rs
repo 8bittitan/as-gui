@@ -239,13 +239,23 @@ pub fn view(s: &Chat, cx: &mut Cx<Chat>) -> El {
         page = page.child(crate::search_panel::panel(s, k));
     }
     if let Some(colour) = s.window_tint() {
-        page = page.child(
-            el().key("window-tint")
-                .pin(Some(0.0), Some(0.0), Some(0.0), None)
-                .h(2.0)
-                .fill(colour.color(k.dark))
-                .a11y_hidden(),
-        );
+        let colour = colour.color(k.dark);
+        let wash_alpha = if k.dark { 0.09 } else { 0.07 };
+        page = page
+            .child(
+                el().key("window-tint-wash")
+                    .pin(Some(0.0), Some(0.0), Some(0.0), None)
+                    .h(64.0)
+                    .gradient(colour.alpha(wash_alpha), colour.alpha(0.0))
+                    .a11y_hidden(),
+            )
+            .child(
+                el().key("window-tint")
+                    .pin(Some(0.0), Some(0.0), Some(0.0), None)
+                    .h(2.0)
+                    .fill(colour.alpha(0.7))
+                    .a11y_hidden(),
+            );
     }
     let tuned = rune_knobs::side(
         page,
