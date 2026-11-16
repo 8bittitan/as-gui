@@ -1554,6 +1554,36 @@ fn keyboard_focus_on_an_earlier_reply_shows_its_actions() {
 }
 
 #[test]
+fn a_question_never_overflows_its_bubble_at_any_width() {
+    let question = "I really enjoy Anime and Japanese inspired shows, what movies or media would you recommend for me?";
+    for width in [640.0, 760.0, 900.0, 1000.0, 1100.0, 1280.0, 1440.0] {
+        let mut rt = test_chat_sized((width, 720.0));
+        rt.update(|s, _| {
+            s.selected_agent = Some(agent_one());
+            s.sessions[0]
+                .messages
+                .push(ChatMessage::user("u0", question));
+        });
+        settle(&mut rt);
+        let elements = rt.elements();
+        let bubble = elements
+            .iter()
+            .find(|e| e.key.as_deref() == Some("bubble-u0"))
+            .unwrap_or_else(|| panic!("no bubble at {width}"))
+            .rect;
+        let text = elements
+            .iter()
+            .find(|e| e.path.contains("bubble-u0") && e.text.as_deref() == Some(question))
+            .unwrap_or_else(|| panic!("no text at {width}"))
+            .rect;
+        assert!(
+            text[0] + text[2] <= bubble[0] + bubble[2] + 0.5,
+            "width {width}: text {text:?} overflows bubble {bubble:?}"
+        );
+    }
+}
+
+#[test]
 fn a_long_question_wraps_within_seventy_percent_of_the_thread() {
     let mut rt = test_chat_sized((900.0, 720.0));
     rt.update(|s, _| {
@@ -1583,5 +1613,179 @@ fn a_long_question_wraps_within_seventy_percent_of_the_thread() {
     assert!(
         (bubble[0] + bubble[2] - (thread[0] + thread[2])).abs() < 0.5,
         "it sits on the right"
+    );
+}
+
+struct FakePoster;
+
+impl crate::images::ImageFetch for FakePoster {
+    fn fetch(&self, url: &str) -> Result<Vec<u8>, String> {
+        if url.contains("slow") {
+            std::thread::sleep(std::time::Duration::from_millis(600));
+        }
+        if url.ends_with("missing.png") {
+            return Err("404".into());
+        }
+        let (w, h) = if url.contains("thumb") {
+            (200u32, 300u32)
+        } else {
+            (400u32, 600u32)
+        };
+        let pixels = vec![200u8; (w * h * 3) as usize];
+        let mut bmp = b"BM".to_vec();
+        bmp.extend((54 + pixels.len() as u32).to_le_bytes());
+        bmp.extend([0u8; 4]);
+        bmp.extend(54u32.to_le_bytes());
+        bmp.extend(40u32.to_le_bytes());
+        bmp.extend(w.to_le_bytes());
+        bmp.extend(h.to_le_bytes());
+        bmp.extend(1u16.to_le_bytes());
+        bmp.extend(24u16.to_le_bytes());
+        bmp.extend([0u8; 24]);
+        bmp.extend(pixels);
+        Ok(bmp)
+    }
+}
+
+fn reply_with_image(src: &str) -> Runtime<Chat> {
+    let mut rt = test_chat_sized((900.0, 900.0));
+    rt.update(|s, _| {
+        s.selected_agent = Some(agent_one());
+        s.images = Some(crate::images::ImageStore::new(
+            Arc::new(|| {}),
+            Arc::new(FakePoster),
+        ));
+        s.sessions[0]
+            .messages
+            .push(ChatMessage::user("u0", "show me one"));
+        let mut a = ChatMessage::assistant("a0");
+        a.text = format!("Here:\n\n![Poster]({src})\n\nEnjoy.");
+        a.streaming = false;
+        s.sessions[0].messages.push(a);
+    });
+    rt
+}
+
+fn poster_rect(rt: &Runtime<Chat>) -> [f32; 4] {
+    rt.elements()
+        .into_iter()
+        .find(|e| e.role == "image" && e.label.as_deref() == Some("Poster"))
+        .expect("an image element")
+        .rect
+}
+
+#[test]
+fn a_reply_shows_its_markdown_image_once_it_has_downloaded() {
+    let mut rt = reply_with_image("https://example.test/poster.png");
+    for _ in 0..200 {
+        rt.frame(1.0 / 60.0);
+        if poster_rect(&rt)[3] > 100.0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    settle(&mut rt);
+    let [_, _, w, h] = poster_rect(&rt);
+    assert!(
+        h > 100.0,
+        "the picture replaced the broken-image line: {w}x{h}"
+    );
+    assert!(w <= 240.5, "a poster stays thumbnail sized: {w}x{h}");
+    assert!(
+        (h / w - 1.5).abs() < 0.02,
+        "it keeps its proportions: {w}x{h}"
+    );
+}
+
+#[test]
+fn an_image_that_fails_to_download_keeps_its_alt_text() {
+    let mut rt = reply_with_image("https://example.test/missing.png");
+    for _ in 0..40 {
+        rt.frame(1.0 / 60.0);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(poster_rect(&rt)[3] < 40.0);
+}
+
+fn settled_image_reply(src: &str) -> Runtime<Chat> {
+    let mut rt = reply_with_image(src);
+    for _ in 0..120 {
+        rt.frame(1.0 / 60.0);
+        std::thread::sleep(std::time::Duration::from_millis(3));
+    }
+    rt
+}
+
+fn rect_of(rt: &Runtime<Chat>, pick: impl Fn(&rune::runtime::ElementInfo) -> bool) -> [f32; 4] {
+    rt.elements()
+        .into_iter()
+        .find(|e| pick(e))
+        .expect("element")
+        .rect
+}
+
+#[test]
+fn an_image_reserves_exactly_the_room_it_draws() {
+    for (src, width) in [
+        ("https://example.test/poster.png", 240.0),
+        ("https://example.test/thumb.png", 200.0),
+    ] {
+        let rt = settled_image_reply(src);
+        let [_, _, w, h] = poster_rect(&rt);
+        assert!((w - width).abs() < 0.5, "{src}: {w}x{h}");
+        assert!((h / w - 1.5).abs() < 0.02, "{src}: {w}x{h}");
+        let thread = rect_of(&rt, |e| e.key.as_deref() == Some("thread"));
+        let enjoy = rect_of(&rt, |e| {
+            e.text.as_deref().is_some_and(|t| t.contains("Enjoy"))
+        });
+        let below = thread[1] + thread[3] - (enjoy[1] + enjoy[3]);
+        assert!(
+            below < 120.0,
+            "{src}: {below} points of dead space under the reply"
+        );
+    }
+}
+
+#[test]
+fn an_image_ending_a_list_item_leaves_room_before_the_next_item() {
+    let mut rt = reply_with_image("x");
+    rt.update(|s, _| {
+        s.sessions[0].messages[1].text =
+            "1. First\n   ![Poster](https://example.test/thumb.png)\n2. Enjoy next".into();
+    });
+    for _ in 0..120 {
+        rt.frame(1.0 / 60.0);
+        std::thread::sleep(std::time::Duration::from_millis(3));
+    }
+    let image = poster_rect(&rt);
+    let next = rect_of(&rt, |e| {
+        e.text.as_deref().is_some_and(|t| t.contains("Enjoy"))
+    });
+    let gap = next[1] - (image[1] + image[3]);
+    assert!(
+        gap >= 12.0,
+        "{gap} points between the picture and the next item"
+    );
+}
+
+#[test]
+fn a_pending_image_holds_its_place_instead_of_showing_the_broken_icon() {
+    let mut rt = reply_with_image("https://example.test/slow-thumb.png");
+    let mut held = None;
+    for _ in 0..40 {
+        rt.frame(1.0 / 60.0);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let rect = poster_rect(&rt);
+        if rect[3] > 20.0 {
+            held = Some(rect);
+            break;
+        }
+    }
+    held.expect("a placeholder while the download runs");
+    settle(&mut rt);
+    let [_, _, w, h] = poster_rect(&rt);
+    assert!(
+        (w - 240.0).abs() < 0.5 && (h - 360.0).abs() < 0.5,
+        "{w}x{h}"
     );
 }

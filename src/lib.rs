@@ -18,6 +18,7 @@ mod command_bar;
 mod conversation;
 mod dotenv;
 mod glow;
+mod images;
 mod keymap;
 mod knobs;
 mod loading;

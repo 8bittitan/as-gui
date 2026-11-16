@@ -187,6 +187,9 @@ fn empty_state(s: &Chat, k: &rune_kit::Kit) -> El {
     state
 }
 
+const REPLY_IMAGE_MAX_WIDTH: f32 = 240.0;
+const REPLY_IMAGE_GAP_BELOW: f32 = 12.0;
+
 /// Satellite's neutral ChatMessage: a grey-100 card on the right, at most 70% of the thread.
 fn user_bubble(k: &rune_kit::Kit, m: &ChatMessage) -> El {
     row()
@@ -196,7 +199,8 @@ fn user_bubble(k: &rune_kit::Kit, m: &ChatMessage) -> El {
         .child(spacer())
         .child(
             row().w_frac(0.7).child(spacer()).child(
-                el().key(format!("bubble-{}", m.id))
+                col()
+                    .key(format!("bubble-{}", m.id))
                     .shrink()
                     .min_w(0.0)
                     .padding(12.0)
@@ -251,6 +255,21 @@ fn assistant_bubble(s: &Chat, k: &rune_kit::Kit, m: &ChatMessage, latest: bool) 
             .style(crate::satellite::markdown(k))
             .streaming(m.streaming)
             .selectable(true);
+        if let Some(images) = s.images.clone() {
+            let edge = if k.dark { Color::WHITE } else { Color::BLACK }.alpha(0.1);
+            reply = reply
+                .images(move |src| images.get(src))
+                .image_frame(move |picture, frame| {
+                    let natural = frame
+                        .image
+                        .size()
+                        .map_or(REPLY_IMAGE_MAX_WIDTH, |[w, _]| w as f32);
+                    picture
+                        .w(natural.min(REPLY_IMAGE_MAX_WIDTH))
+                        .mb(REPLY_IMAGE_GAP_BELOW)
+                        .outline(1.0, -1.0, edge)
+                });
+        }
         // Words that arrive mid-stream fade in; a settled reply shows whole.
         if m.streaming {
             reply = reply.reveal(s.reveal_seconds());

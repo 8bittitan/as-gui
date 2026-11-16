@@ -32,6 +32,7 @@ use crate::agent::{
     StreamEvent,
 };
 use crate::command_bar::CommandBar;
+use crate::images::{HttpImages, ImageStore};
 use crate::keymap::{Action, Keymap, Registration, ShortcutRegistrar};
 use crate::loading::Load;
 use crate::menubar::{AppShell, StatusItem};
@@ -62,6 +63,7 @@ pub struct Chat {
     pub label_edits: Vec<TextEdit>,
     pub application_menu_open: bool,
     waker: Option<Waker>,
+    pub images: Option<ImageStore>,
     pub agents: Vec<AgentInfo>,
     pub agents_load: Load,
     pub selected_agent: Option<AgentInfo>,
@@ -179,6 +181,7 @@ impl Chat {
             label_edits: Vec::new(),
             application_menu_open: false,
             waker: None,
+            images: None,
             agents: Vec::new(),
             agents_load: Load::Idle,
             selected_agent: None,
@@ -328,6 +331,7 @@ impl Chat {
 }
 
 pub fn setup(s: &mut Chat, waker: Waker) {
+    s.images = Some(ImageStore::new(waker.clone(), Arc::new(HttpImages)));
     s.waker = Some(waker);
 }
 
@@ -348,5 +352,6 @@ pub fn poll(s: &mut Chat, t: f64, tx: &mut Tx) -> bool {
     changed |= s.drain_turn(t);
     changed |= s.drain_client_tools(tx);
     changed |= s.focus_agent_panel(tx);
+    changed |= s.images.as_ref().is_some_and(ImageStore::take_decoded);
     changed
 }

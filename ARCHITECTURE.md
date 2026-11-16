@@ -83,6 +83,7 @@ The crate is a library with a thin binary: `src/main.rs` calls `run()` in `src/l
 ### Platform and support
 
 - `menubar.rs` and `menubar/mac.rs`: the menu bar icon and its menu. `launch_mode` decides at startup whether the window opens. The Dock icon shows only while the main window is open.
+- `images.rs`: the pictures in a reply's markdown (`![alt](url)`). Rune has no HTTP client on native, so `ImageStore::get` starts a download on its first ask for a URL (the one place a view starts work, because the markdown callback has no `Chat` to hand it to), `ImageFetch` is the seam, and Rune's `ImageCache` decodes the bytes. A failed download is remembered and the reply keeps the alt text. A reply caps a picture at 240 pt wide. Only the main window wires it; Quick Ask replies still show alt text.
 - `notify.rs`: reply notifications through the `Notifier` trait. `first_line` makes the body from a reply's first line of prose.
 - `keymap.rs`: the seven rebindable shortcuts, conflict checks, and the trait that registers the two system-wide ones.
 - `store.rs`: the saved state as JSON. A value the app no longer knows reads as unset. The file is created readable by its owner only.
