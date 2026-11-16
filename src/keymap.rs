@@ -13,10 +13,11 @@ pub enum Action {
     NewSession,
     QuickAsk,
     AskSelection,
+    AgentSettings,
 }
 
 impl Action {
-    pub const COUNT: usize = 6;
+    pub const COUNT: usize = 7;
 
     pub const ALL: [Action; Action::COUNT] = [
         Action::ToggleSidebar,
@@ -25,6 +26,7 @@ impl Action {
         Action::NewSession,
         Action::QuickAsk,
         Action::AskSelection,
+        Action::AgentSettings,
     ];
 
     pub fn index(self) -> usize {
@@ -45,6 +47,7 @@ impl Action {
             Action::NewSession => "new-session",
             Action::QuickAsk => "quick-ask",
             Action::AskSelection => "ask-selection",
+            Action::AgentSettings => "agent-settings",
         }
     }
 
@@ -56,6 +59,7 @@ impl Action {
             Action::NewSession => "New conversation",
             Action::QuickAsk => "Quick Ask",
             Action::AskSelection => "Ask about selection",
+            Action::AgentSettings => "Agent settings",
         }
     }
 
@@ -75,6 +79,7 @@ impl Action {
             Action::NewSession => "cmd+n",
             Action::QuickAsk => "cmd+shift+space",
             Action::AskSelection => "cmd+shift+a",
+            Action::AgentSettings => "cmd+shift+comma",
         }
     }
 }

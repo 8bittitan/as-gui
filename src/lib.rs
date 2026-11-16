@@ -9,6 +9,7 @@
 //! `logs/as-gui.log.YYYY-MM-DD`; default `warn`). Headless: `cargo run -- --tree tree.json`.
 
 mod agent;
+mod agent_panel;
 #[cfg(feature = "bench")]
 pub mod bench;
 mod brand;
@@ -104,6 +105,10 @@ const SCENES: &[(&str, SceneFn)] = &[
     ("tools", scenes::tools),
     ("timeline", scenes::timeline),
     ("tool-error", scenes::tool_error),
+    ("client-tool-approval", scenes::client_tool_approval),
+    ("client-tool-manual", scenes::client_tool_manual),
+    ("client-tool-running", scenes::client_tool_running),
+    ("agent-panel", scenes::agent_panel),
     ("search", scenes::search),
     ("settings", scenes::settings),
     ("settings-wide", scenes::settings_wide),
@@ -238,10 +243,23 @@ pub fn run() {
             main: chat.clone(),
             panel: panel.handle(),
         };
+        let tool_shell = menubar::RuneShell {
+            main: chat.clone(),
+            panel: panel.handle(),
+        };
         let menu_target = chat.clone();
         chat.update(move |chat, _| {
             chat.attach_registrar(std::rc::Rc::new(quick_ask::PanelShortcuts::new(shortcuts)));
             chat.attach_shell(std::rc::Rc::new(shell));
+            chat.client_tools = Arc::new(agent::Registry::new(
+                agent::Builtins {
+                    shell: Arc::new(tool_shell),
+                    notifier: chat.notifier.clone(),
+                    selection: chat.selection.clone(),
+                },
+                chat.bindings.clone(),
+                Arc::new(agent::SystemRunner),
+            ));
             if launch.status_item {
                 menubar::attach_status_item(chat, menu_target, launch.show_window);
             }

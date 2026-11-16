@@ -9,6 +9,7 @@ pub fn parse_sse_line(line: &str) -> Option<StreamEvent> {
     }
     let v: serde_json::Value = serde_json::from_str(data).ok()?;
     match v.get("type")?.as_str()? {
+        "start-step" => Some(StreamEvent::StepStart),
         "start" => Some(StreamEvent::Start {
             message_id: v
                 .get("messageId")
@@ -92,7 +93,9 @@ pub fn parse_sse_line(line: &str) -> Option<StreamEvent> {
                 });
             }
             Some(StreamEvent::ToolUsed(ToolCall {
+                call_id,
                 name: name.into(),
+                provider_metadata: v.get("providerMetadata").cloned(),
                 input: v
                     .get("input")
                     .and_then(|i| serde_json::to_string_pretty(i).ok()),
@@ -148,8 +151,7 @@ fn recognised_but_ignored(line: &str) -> bool {
     };
     match v.get("type").and_then(|t| t.as_str()) {
         Some(
-            "start-step"
-            | "finish-step"
+            "finish-step"
             | "text-start"
             | "text-end"
             | "reasoning-start"
@@ -220,6 +222,12 @@ fn failed_tool_input(part: &serde_json::Value) -> Option<ToolCall> {
         value => serde_json::to_string_pretty(value).ok(),
     }?;
     Some(ToolCall {
+        call_id: part
+            .get("toolCallId")
+            .and_then(|i| i.as_str())
+            .unwrap_or_default()
+            .into(),
+        provider_metadata: None,
         name: name.into(),
         input: Some(input),
         request: None,
@@ -252,15 +260,18 @@ fn tool_call_id(line: &str) -> Option<String> {
 /// arrives as `tool-input-available` still shows its input in the UI.
 #[derive(Default)]
 struct ToolInputs {
-    calls: Vec<PendingCall>,
+    calls: Vec<TrackedCall>,
 }
 
-struct PendingCall {
+struct TrackedCall {
     id: String,
     name: String,
     input: String,
     done: bool,
     failed: bool,
+    /// The call's complete input, once `tool-input-available` brought one.
+    complete_input: Option<serde_json::Value>,
+    has_output: bool,
 }
 
 impl ToolInputs {
@@ -269,17 +280,19 @@ impl ToolInputs {
             return;
         }
         if !self.calls.iter().any(|call| call.id == id) {
-            self.calls.push(PendingCall {
+            self.calls.push(TrackedCall {
                 id: id.into(),
                 name: name.into(),
                 input: String::new(),
                 done: false,
                 failed: false,
+                complete_input: None,
+                has_output: false,
             });
         }
     }
 
-    fn call_mut(&mut self, id: &str) -> Option<&mut PendingCall> {
+    fn call_mut(&mut self, id: &str) -> Option<&mut TrackedCall> {
         self.calls.iter_mut().find(|call| call.id == id)
     }
 
@@ -327,14 +340,20 @@ impl ToolInputs {
             match &ev {
                 StreamEvent::ToolUsed(call) => {
                     self.note_call(&call_id, &call.name);
-                    if call.input.is_some() {
+                    if let Some(input) = &call.input {
                         self.finish(&call_id);
+                        if let Some(tracked) = self.call_mut(&call_id) {
+                            tracked.complete_input = serde_json::from_str(input).ok();
+                        }
                     }
                 }
                 StreamEvent::ToolStarted { name, .. } => self.note_call(&call_id, name),
                 StreamEvent::ToolFinished { name, .. } => {
                     self.note_call(&call_id, name);
                     self.finish(&call_id);
+                    if let Some(call) = self.call_mut(&call_id) {
+                        call.has_output = true;
+                    }
                 }
                 StreamEvent::ToolFailed { name, .. } => {
                     self.note_call(&call_id, name);
@@ -369,11 +388,32 @@ impl ToolInputs {
             .iter()
             .filter(|call| !call.input.is_empty() && !call.done)
             .map(|call| ToolCall {
+                call_id: call.id.clone(),
+                provider_metadata: None,
                 name: call.name.clone(),
                 input: pretty_json(&call.input),
                 open: false,
                 request: None,
                 error: None,
+            })
+            .collect()
+    }
+}
+
+impl ToolInputs {
+    /// The calls the model finished writing and nobody answered, so far: for a client tool,
+    /// the stream's end is the cue to run it. A call that failed (`tool-input-error`) or
+    /// that only waits for approval has no complete input and is never one.
+    fn awaiting_output(&self) -> Vec<PendingCall> {
+        self.calls
+            .iter()
+            .filter(|call| !call.failed && !call.has_output)
+            .filter_map(|call| {
+                Some(PendingCall {
+                    call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    input: call.complete_input.clone()?,
+                })
             })
             .collect()
     }
@@ -458,14 +498,21 @@ impl Decoder {
     /// The calls whose input only ever arrived as deltas, once the stream has ended.
     pub(super) fn finish(self) -> Vec<StreamEvent> {
         debug!("stream ended after {} text deltas", self.deltas);
-        self.tools
+        let mut events: Vec<StreamEvent> = self
+            .tools
             .pending()
             .into_iter()
             .map(|call| {
                 debug!("finalizing buffered input for {}", call.name);
                 StreamEvent::ToolUsed(call)
             })
-            .collect()
+            .collect();
+        let awaiting = self.tools.awaiting_output();
+        if !awaiting.is_empty() {
+            debug!("stream ended on {} client tool calls", awaiting.len());
+            events.push(StreamEvent::ClientToolsPending(awaiting));
+        }
+        events
     }
 
     fn text(&mut self, text: String) -> Vec<StreamEvent> {
@@ -506,6 +553,11 @@ impl Decoder {
             self.tools.finish(call_id);
         }
         let call = ToolCall {
+            call_id: data
+                .and_then(|d| d.get("toolCallId")?.as_str())
+                .unwrap_or_default()
+                .into(),
+            provider_metadata: None,
             name: name.into(),
             input: data
                 .and_then(|d| d.get("args"))
@@ -611,6 +663,8 @@ mod tests {
         assert_eq!(
             ev,
             Some(StreamEvent::ToolUsed(ToolCall {
+                call_id: "c1".into(),
+                provider_metadata: None,
                 name: "algolia_search".into(),
                 input: None,
                 open: false,
@@ -950,6 +1004,8 @@ mod tests {
                     name: "search".into(),
                 },
                 StreamEvent::ToolUsed(ToolCall {
+                    call_id: "c1".into(),
+                    provider_metadata: None,
                     name: "search".into(),
                     input: Some("{\"query\": ".into()),
                     request: None,
@@ -1071,7 +1127,6 @@ mod tests {
     #[test]
     fn lifecycle_and_data_events_are_recognised_but_ignored() {
         for line in [
-            "data: {\"type\":\"start-step\"}",
             "data: {\"type\":\"finish-step\"}",
             "data: {\"type\":\"text-start\",\"id\":\"t1\"}",
             "data: {\"type\":\"text-end\",\"id\":\"t1\"}",
@@ -1120,6 +1175,8 @@ mod tests {
         assert_eq!(
             inputs.pending(),
             vec![ToolCall {
+                call_id: "call_1".into(),
+                provider_metadata: None,
                 name: "algolia_search".into(),
                 input: Some("{\n  \"query\": \"rustic season\"\n}".into()),
                 open: false,
@@ -1186,6 +1243,8 @@ mod tests {
         assert_eq!(
             ev,
             Some(StreamEvent::ToolUsed(ToolCall {
+                call_id: "c1".into(),
+                provider_metadata: None,
                 name: "schedule_task_tool".into(),
                 input: Some("{\n  \"name\": \"inbox-check\"\n}".into()),
                 open: false,
@@ -1195,9 +1254,144 @@ mod tests {
         );
     }
 
+    fn client_call_stream(extra: &[&'static str]) -> Vec<&'static str> {
+        let mut lines = vec![
+            r#"data: {"type":"start","messageId":"m1"}"#,
+            r#"data: {"type":"start-step"}"#,
+        ];
+        lines.extend_from_slice(extra);
+        lines.extend([
+            r#"data: {"type":"finish-step"}"#,
+            r#"data: {"type":"finish"}"#,
+            "data: [DONE]",
+        ]);
+        lines
+    }
+
+    fn pending_calls(events: &[StreamEvent]) -> Vec<PendingCall> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::ClientToolsPending(calls) => Some(calls.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+
+    #[test]
+    fn a_step_start_becomes_an_event() {
+        assert_eq!(
+            parse_sse_line(r#"data: {"type":"start-step"}"#),
+            Some(StreamEvent::StepStart)
+        );
+    }
+
+    #[test]
+    fn a_call_with_input_and_no_output_is_pending_when_the_stream_ends() {
+        let events = decode(&client_call_stream(&[
+            r#"data: {"type":"tool-input-start","toolCallId":"c1","toolName":"throw_confetti"}"#,
+            r#"data: {"type":"tool-input-delta","toolCallId":"c1","inputTextDelta":"{\"count\":50}"}"#,
+            r#"data: {"type":"tool-input-available","toolCallId":"c1","toolName":"throw_confetti","input":{"count":50}}"#,
+        ]))
+        .unwrap();
+        assert_eq!(
+            events.last(),
+            Some(&StreamEvent::ClientToolsPending(vec![PendingCall {
+                call_id: "c1".into(),
+                name: "throw_confetti".into(),
+                input: serde_json::json!({ "count": 50 }),
+            }])),
+            "the stream's end is the cue, and nothing else follows it"
+        );
+    }
+
+    #[test]
+    fn a_stream_whose_calls_all_got_outputs_has_nothing_pending() {
+        let events = decode(&client_call_stream(&[
+            r#"data: {"type":"tool-input-available","toolCallId":"c1","toolName":"search","input":{"q":"x"}}"#,
+            r#"data: {"type":"tool-output-available","toolCallId":"c1","output":{"hits":[]}}"#,
+        ]))
+        .unwrap();
+        assert!(pending_calls(&events).is_empty());
+    }
+
+    #[test]
+    fn a_tool_input_error_call_is_not_pending() {
+        let events = decode(&client_call_stream(&[
+            r#"data: {"type":"tool-input-start","toolCallId":"c1","toolName":"throw_confetti"}"#,
+            r#"data: {"type":"tool-input-error","toolCallId":"c1","toolName":"throw_confetti","input":{"count":"many"},"errorText":"Invalid input"}"#,
+            r#"data: {"type":"tool-output-error","toolCallId":"c1","errorText":"Invalid input"}"#,
+        ]))
+        .unwrap();
+        assert!(pending_calls(&events).is_empty());
+    }
+
+    #[test]
+    fn a_mixed_step_reports_only_the_call_without_an_output() {
+        let events = decode(&client_call_stream(&[
+            r#"data: {"type":"tool-input-available","toolCallId":"server","toolName":"search","input":{"q":"x"}}"#,
+            r#"data: {"type":"tool-input-available","toolCallId":"client","toolName":"throw_confetti","input":{}}"#,
+            r#"data: {"type":"tool-output-available","toolCallId":"server","output":{"hits":[]}}"#,
+        ]))
+        .unwrap();
+        let pending = pending_calls(&events);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].call_id, "client");
+    }
+
+    #[test]
+    fn two_calls_of_one_tool_are_both_pending() {
+        let events = decode(&client_call_stream(&[
+            r#"data: {"type":"tool-input-available","toolCallId":"a","toolName":"throw_confetti","input":{"count":1}}"#,
+            r#"data: {"type":"tool-input-available","toolCallId":"b","toolName":"throw_confetti","input":{"count":2}}"#,
+        ]))
+        .unwrap();
+        let ids: Vec<_> = pending_calls(&events)
+            .into_iter()
+            .map(|call| call.call_id)
+            .collect();
+        assert_eq!(ids, ["a", "b"]);
+    }
+
+    #[test]
+    fn a_call_waiting_for_approval_is_not_a_client_call() {
+        let events = decode(&[
+            r#"data: {"type":"data-tool-approval","data":{"toolCallId":"c1","toolName":"delete_records","args":{"ids":[1]}}}"#,
+        ])
+        .unwrap();
+        assert!(pending_calls(&events).is_empty());
+    }
+
+    #[test]
+    fn the_provider_metadata_of_a_call_is_kept() {
+        let events = decode(&client_call_stream(&[
+            r#"data: {"type":"tool-input-available","toolCallId":"c1","toolName":"throw_confetti","input":{},"providerMetadata":{"google":{"thoughtSignature":"sig"}}}"#,
+        ]))
+        .unwrap();
+        let used = events.iter().find_map(|event| match event {
+            StreamEvent::ToolUsed(call) => Some(call),
+            _ => None,
+        });
+        assert_eq!(
+            used.and_then(|call| call.provider_metadata.clone()),
+            Some(serde_json::json!({ "google": { "thoughtSignature": "sig" } }))
+        );
+    }
+
+    #[test]
+    fn the_last_line_of_a_stream_without_a_trailing_newline_is_still_read() {
+        use std::io::BufRead;
+        let body = "data: {\"type\":\"tool-input-available\",\"toolCallId\":\"c1\",\"toolName\":\"t\",\"input\":{\"a\":1}}";
+        let mut decoder = Decoder::default();
+        for line in std::io::Cursor::new(body).lines() {
+            decoder.line(&line.unwrap()).unwrap();
+        }
+        assert_eq!(pending_calls(&decoder.finish()).len(), 1);
+    }
+
     #[test]
     fn unknown_parts_and_blanks_are_tolerated() {
-        assert_eq!(parse_sse_line("data: {\"type\":\"start-step\"}"), None);
         assert_eq!(parse_sse_line(": keep-alive"), None);
         assert_eq!(parse_sse_line(""), None);
     }

@@ -13,7 +13,7 @@ use rune_kit::{IconButton, IconButtonVariant, Markdown, Spinner, State};
 use tracing::warn;
 
 use crate::agent::{
-    AgentSnapshot, ChatMessage, Role, SearchHit, StreamEvent, ToolCall, spawn_stream,
+    AgentSnapshot, ChatMessage, PendingCall, Role, SearchHit, StreamEvent, ToolCall, spawn_stream,
 };
 use crate::chat::Chat;
 use crate::palette::AppColour;
@@ -32,6 +32,11 @@ pub struct QuickAsk {
     pub me: Option<AppHandle<QuickAsk>>,
     turn_started: Option<f64>,
     events: Option<std::sync::mpsc::Receiver<StreamEvent>>,
+    /// Every event of the reply being streamed, for handing a turn that ended on client
+    /// tool calls to the main window, which runs them.
+    pub(crate) replay: Vec<StreamEvent>,
+    /// The client tool calls the reply ended on: this panel never runs them.
+    pub(crate) pending_calls: Vec<PendingCall>,
     pub waker: Option<Waker>,
     next_id: usize,
     /// The text the next question is about.
@@ -57,6 +62,8 @@ impl QuickAsk {
             me,
             turn_started: None,
             events: None,
+            replay: Vec::new(),
+            pending_calls: Vec::new(),
             waker: None,
             next_id: 0,
             quote: None,
@@ -105,6 +112,8 @@ impl QuickAsk {
         self.messages.push(user);
         self.messages.push(assistant);
         self.pending = true;
+        self.replay.clear();
+        self.pending_calls.clear();
         let waker = self.waker.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
         self.events = Some(receiver);
@@ -129,7 +138,13 @@ impl QuickAsk {
         let reply = self.messages[1].text.clone();
         let conversation_id = self.messages[1].server_id.clone();
         let chat = chat.clone();
-        chat.update(move |c, _| c.receive_quick_ask(prompt, reply, conversation_id));
+        if self.pending_calls.is_empty() {
+            chat.update(move |c, _| c.receive_quick_ask(prompt, reply, conversation_id));
+        } else {
+            let events = std::mem::take(&mut self.replay);
+            chat.update(move |c, _| c.receive_quick_ask_turn(prompt, conversation_id, events));
+        }
+        self.pending_calls.clear();
         self.messages.clear();
         self.asked_about.clear();
         self.error = None;
@@ -370,6 +385,7 @@ pub fn poll(s: &mut QuickAsk, t: f64, _: &mut Tx) -> bool {
         match receiver.try_recv() {
             Ok(ev) => {
                 changed = true;
+                s.replay.push(ev.clone());
                 match ev {
                     StreamEvent::Start { message_id } => {
                         if let Some(m) = s.messages.last_mut() {
@@ -401,11 +417,14 @@ pub fn poll(s: &mut QuickAsk, t: f64, _: &mut Tx) -> bool {
                             m.server_id = Some(id);
                         }
                     }
+                    StreamEvent::ClientToolsPending(calls) => s.pending_calls = calls,
                     StreamEvent::ToolUsed(mut call) => {
                         call.request = call.input.clone();
                         s.merge_tool(call);
                     }
                     StreamEvent::ToolStarted { name, .. } => s.merge_tool(ToolCall {
+                        call_id: String::new(),
+                        provider_metadata: None,
                         name,
                         input: None,
                         open: false,
@@ -413,6 +432,8 @@ pub fn poll(s: &mut QuickAsk, t: f64, _: &mut Tx) -> bool {
                         error: None,
                     }),
                     StreamEvent::ToolFailed { name, error, .. } => s.merge_tool(ToolCall {
+                        call_id: String::new(),
+                        provider_metadata: None,
                         name,
                         input: None,
                         request: None,
@@ -420,6 +441,8 @@ pub fn poll(s: &mut QuickAsk, t: f64, _: &mut Tx) -> bool {
                         open: false,
                     }),
                     StreamEvent::ToolFinished { name, output, .. } => s.merge_tool(ToolCall {
+                        call_id: String::new(),
+                        provider_metadata: None,
                         name,
                         input: output,
                         open: false,
@@ -719,6 +742,9 @@ fn transcript(s: &QuickAsk, k: &rune_kit::Kit) -> El {
                 if !m.tools.is_empty() {
                     reply = reply.child(tools_section(k, m));
                 }
+                if !m.streaming && !s.pending_calls.is_empty() {
+                    reply = reply.child(continue_card(k, &s.pending_calls));
+                }
                 reply = reply.child(
                     Markdown::new(m.text.clone())
                         .style(crate::satellite::markdown(k))
@@ -742,6 +768,42 @@ fn transcript(s: &QuickAsk, k: &rune_kit::Kit) -> El {
         .max_h(320.0)
         .scroll(ScrollSpec { stick_bottom: true })
         .child(content)
+}
+
+/// A reply that ended on tools to run on this Mac: the panel can't ask for approval, so it
+/// offers the main window, where the approval card lives.
+fn continue_card(k: &rune_kit::Kit, calls: &[PendingCall]) -> El {
+    let names = calls
+        .iter()
+        .map(|call| call.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    col()
+        .key("qa-client-pending")
+        .role("group")
+        .label("Waiting to run on this Mac")
+        .w_full()
+        .min_w(0.0)
+        .padding(12.0)
+        .gap(8.0)
+        .radius(satellite::RADIUS_CARD)
+        .fill(k.c.bg_base)
+        .border(1.0, k.c.border_base)
+        .child(
+            text(format!(
+                "{names} needs to run on this Mac, with your approval."
+            ))
+            .wrap()
+            .font(typography::BODY)
+            .color(k.c.text_base),
+        )
+        .child(
+            satellite::button("Continue in the main window")
+                .variant(rune_kit::ButtonVariant::Contrast)
+                .on_press_tx(|s: &mut QuickAsk, tx: &mut Tx| s.promote(tx))
+                .sized(k, satellite::Size::Small)
+                .key("qa-continue"),
+        )
 }
 
 /// The question as typed; a quoted one shows its instruction, the quote folded to one line

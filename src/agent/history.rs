@@ -76,6 +76,57 @@ pub fn parse_conversations_page(json: &str) -> Result<(Vec<SessionInfo>, usize),
     Ok((sessions, total_pages.saturating_sub(page)))
 }
 
+/// One agent (`GET /agent-studio/1/agents/{agentId}`). Tools with a `type` other than a
+/// client tool read as names the server runs, so an unknown kind is never an error.
+pub fn parse_agent_config(json: &str) -> Result<AgentConfig, String> {
+    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("bad agent: {e}"))?;
+    let text = |field: &str| v.get(field).and_then(|t| t.as_str()).map(String::from);
+    let status = match text("status").as_deref() {
+        Some("published") => AgentStatus::Published,
+        Some("draft") => AgentStatus::Draft,
+        other => return Err(format!("unknown agent status {other:?}")),
+    };
+    let mut client_tools = Vec::new();
+    let mut other_tools = Vec::new();
+    let tools = v
+        .get("config")
+        .and_then(|c| c.get("tools"))
+        .or_else(|| v.get("tools"))
+        .and_then(|t| t.as_array());
+    for tool in tools.into_iter().flatten() {
+        let field = |name: &str| tool.get(name).and_then(|t| t.as_str()).map(String::from);
+        match tool.get("type").and_then(|t| t.as_str()) {
+            Some("client_side") => {
+                let Some(name) = field("name").filter(|n| !n.is_empty()) else {
+                    continue;
+                };
+                client_tools.push(ClientToolDecl {
+                    name,
+                    description: field("description"),
+                    input_schema: tool.get("inputSchema").filter(|s| !s.is_null()).cloned(),
+                    is_terminal: tool
+                        .get("isTerminal")
+                        .and_then(|t| t.as_bool())
+                        .unwrap_or(false),
+                });
+            }
+            other => {
+                if let Some(name) = field("name").or_else(|| other.map(String::from)) {
+                    other_tools.push(name);
+                }
+            }
+        }
+    }
+    Ok(AgentConfig {
+        name: text("name").ok_or("agent has no name")?,
+        description: text("description"),
+        status,
+        model: text("model"),
+        client_tools,
+        other_tools,
+    })
+}
+
 /// One conversation's messages (`ConversationFullResponse`): text parts join into the
 /// message's text, tool calls become the UI's tool group, and a tool result fills the call
 /// it answers. Parts the UI doesn't show (reasoning, lifecycle steps) are skipped.
@@ -100,8 +151,9 @@ pub fn parse_conversation(json: &str) -> Result<Vec<ChatMessage>, String> {
             .to_string();
         let mut text = String::new();
         let mut tools: Vec<ToolCall> = Vec::new();
-        // toolCallId → index into `tools`, so a later tool result can fill its call.
-        let mut calls: Vec<(String, usize)> = Vec::new();
+        let mut replay: Vec<Part> = Vec::new();
+        // toolCallId → indices into `tools` and `replay`, so a later tool result can fill its call.
+        let mut calls: Vec<(String, usize, usize)> = Vec::new();
         if let Some(parts) = m.get("parts").and_then(|p| p.as_array()) {
             for part in parts {
                 match part.get("type").and_then(|t| t.as_str()) {
@@ -111,8 +163,10 @@ pub fn parse_conversation(json: &str) -> Result<Vec<ChatMessage>, String> {
                                 text.push_str("\n\n");
                             }
                             text.push_str(t);
+                            replay.push(Part::Text(t.to_string()));
                         }
                     }
+                    Some("step-start") => replay.push(Part::StepStart),
                     Some("tool-call") => {
                         let Some(name) = part
                             .get("toolName")
@@ -129,8 +183,19 @@ pub fn parse_conversation(json: &str) -> Result<Vec<ChatMessage>, String> {
                         let input = part
                             .get("args")
                             .and_then(|a| serde_json::to_string_pretty(a).ok());
-                        calls.push((call_id, tools.len()));
+                        replay.push(Part::Tool(ToolPart {
+                            call_id: call_id.clone(),
+                            name: name.into(),
+                            input: part.get("args").cloned().unwrap_or_default(),
+                            state: ToolState::InputAvailable,
+                            output: None,
+                            error: None,
+                            provider_metadata: None,
+                        }));
+                        calls.push((call_id.clone(), tools.len(), replay.len() - 1));
                         tools.push(ToolCall {
+                            call_id,
+                            provider_metadata: None,
                             name: name.into(),
                             request: input.clone(),
                             input,
@@ -143,7 +208,12 @@ pub fn parse_conversation(json: &str) -> Result<Vec<ChatMessage>, String> {
                             .get("toolCallId")
                             .and_then(|t| t.as_str())
                             .unwrap_or_default();
-                        let Some((_, i)) = calls.iter().rev().find(|(id, _)| id == call_id) else {
+                        let Some(&(_, i, part_index)) =
+                            calls.iter().rev().find(|(id, _, _)| id == call_id)
+                        else {
+                            continue;
+                        };
+                        let Part::Tool(tool_part) = &mut replay[part_index] else {
                             continue;
                         };
                         let output = part.get("output");
@@ -156,11 +226,16 @@ pub fn parse_conversation(json: &str) -> Result<Vec<ChatMessage>, String> {
                                     serde_json::Value::String(text) => text.clone(),
                                     other => other.to_string(),
                                 };
-                                tools[*i].error = Some(tool_error_message(&raw));
+                                let error = tool_error_message(&raw);
+                                tool_part.state = ToolState::OutputError;
+                                tool_part.error = Some(error.clone());
+                                tools[i].error = Some(error);
                             }
                             _ => {
+                                tool_part.state = ToolState::OutputAvailable;
+                                tool_part.output = Some(value.clone());
                                 if let Ok(pretty) = serde_json::to_string_pretty(value) {
-                                    tools[*i].input = Some(pretty);
+                                    tools[i].input = Some(pretty);
                                 }
                             }
                         }
@@ -183,6 +258,9 @@ pub fn parse_conversation(json: &str) -> Result<Vec<ChatMessage>, String> {
         message.streaming = false;
         message.server_id = Some(id);
         message.tools = tools;
+        if role == Role::Assistant {
+            message.parts = replay;
+        }
         out.push(message);
     }
     Ok(out)
@@ -191,6 +269,59 @@ pub fn parse_conversation(json: &str) -> Result<Vec<ChatMessage>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const AGENT: &str = r#"{
+        "id": "a1", "name": "Shop", "description": "Sells things", "status": "published",
+        "model": "gpt-5", "instructions": "Be kind",
+        "config": { "tools": [
+            { "type": "client_side", "name": "export_report", "description": "Exports",
+              "inputSchema": { "type": "object", "properties": { "id": { "type": "string" } } },
+              "isTerminal": true },
+            { "type": "algolia_search_index", "name": "products" },
+            { "type": "mcp", "name": "docs" },
+            { "type": "future_kind" }
+        ] }
+    }"#;
+
+    #[test]
+    fn an_agent_config_lists_client_tools_and_the_others_by_name() {
+        let config = parse_agent_config(AGENT).unwrap();
+        assert_eq!(config.name, "Shop");
+        assert_eq!(config.status, AgentStatus::Published);
+        assert_eq!(config.model.as_deref(), Some("gpt-5"));
+        assert_eq!(config.client_tools.len(), 1);
+        let tool = &config.client_tools[0];
+        assert_eq!(tool.name, "export_report");
+        assert_eq!(tool.description.as_deref(), Some("Exports"));
+        assert!(tool.is_terminal);
+        assert_eq!(tool.input_schema.as_ref().unwrap()["type"], "object");
+        assert_eq!(config.other_tools, ["products", "docs", "future_kind"]);
+    }
+
+    #[test]
+    fn an_agent_config_with_missing_optional_fields_still_parses() {
+        let config = parse_agent_config(r#"{ "name": "Bare", "status": "draft" }"#).unwrap();
+        assert_eq!(config.status, AgentStatus::Draft);
+        assert_eq!(config.description, None);
+        assert_eq!(config.model, None);
+        assert!(config.client_tools.is_empty() && config.other_tools.is_empty());
+    }
+
+    #[test]
+    fn an_agent_config_without_a_name_is_an_error() {
+        assert!(parse_agent_config(r#"{ "status": "draft" }"#).is_err());
+    }
+
+    #[test]
+    fn a_client_tool_without_a_schema_or_terminal_flag_takes_the_defaults() {
+        let config = parse_agent_config(
+            r#"{ "name": "A", "status": "published",
+                 "config": { "tools": [ { "type": "client_side", "name": "ping" } ] } }"#,
+        )
+        .unwrap();
+        assert_eq!(config.client_tools[0].input_schema, None);
+        assert!(!config.client_tools[0].is_terminal);
+    }
 
     #[test]
     fn a_conversations_page_parses_ids_titles_and_pages_left() {
@@ -276,6 +407,41 @@ mod tests {
         assert_eq!(tools[0].error.as_deref(), Some("Index does not exist"));
         assert_eq!(tools[0].input.as_deref(), Some("{\n  \"query\": \"x\"\n}"));
         assert_eq!(tools[1].error.as_deref(), Some("Timed out"));
+    }
+
+    #[test]
+    fn a_conversation_builds_its_parts_in_order_with_each_calls_outcome() {
+        let json = r#"{ "id": "c1", "messages": [
+            { "id": "m1", "role": "assistant", "parts": [
+                { "type": "step-start" },
+                { "type": "text", "text": "Checking." },
+                { "type": "tool-call", "toolCallId": "t1", "toolName": "search_tool",
+                  "args": { "q": "x" } },
+                { "type": "tool-result", "toolCallId": "t1", "toolName": "search_tool",
+                  "output": { "type": "json", "value": { "hits": 3 } } },
+                { "type": "tool-call", "toolCallId": "t2", "toolName": "facets", "args": {} },
+                { "type": "tool-result", "toolCallId": "t2", "toolName": "facets",
+                  "output": { "type": "error-text", "value": "Error: no such facet" } },
+                { "type": "data-suggestions", "data": { "suggestions": ["More"] } },
+                { "type": "text", "text": "Done." }
+            ] }
+        ] }"#;
+        let parts = &parse_conversation(json).unwrap()[0].parts;
+        assert_eq!(parts.len(), 5, "data parts are not kept");
+        assert_eq!(parts[0], Part::StepStart);
+        assert_eq!(parts[1], Part::Text("Checking.".into()));
+        let Part::Tool(found) = &parts[2] else {
+            panic!("{parts:?}");
+        };
+        assert_eq!(found.state, ToolState::OutputAvailable);
+        assert_eq!(found.input, serde_json::json!({ "q": "x" }));
+        assert_eq!(found.output, Some(serde_json::json!({ "hits": 3 })));
+        let Part::Tool(failed) = &parts[3] else {
+            panic!("{parts:?}");
+        };
+        assert_eq!(failed.state, ToolState::OutputError);
+        assert_eq!(failed.error.as_deref(), Some("no such facet"));
+        assert_eq!(parts[4], Part::Text("Done.".into()));
     }
 
     #[test]

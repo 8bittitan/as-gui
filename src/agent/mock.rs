@@ -20,6 +20,30 @@ impl AgentDirectory for MockDirectory {
         Ok(self.sessions.clone())
     }
 
+    fn agent(&self, agent_id: &str) -> Result<AgentConfig, String> {
+        let info = self
+            .agents
+            .iter()
+            .find(|a| a.agent_id == agent_id)
+            .ok_or_else(|| format!("no agent {agent_id}"))?;
+        Ok(AgentConfig {
+            name: info.name.clone(),
+            description: info.description.clone(),
+            status: info.status.clone(),
+            model: info.model.clone(),
+            client_tools: vec![ClientToolDecl {
+                name: "throw_confetti".into(),
+                description: Some("Throws confetti over the window".into()),
+                input_schema: Some(json!({
+                    "type": "object",
+                    "properties": { "count": { "type": "integer" } }
+                })),
+                is_terminal: false,
+            }],
+            other_tools: vec!["load_skill_tool".into(), "schedule_task_tool".into()],
+        })
+    }
+
     fn conversation(
         &self,
         _agent_id: &str,
@@ -38,6 +62,8 @@ pub fn mock_tools() -> Vec<ToolCall> {
     let skill = serde_json::to_string_pretty(&json!({ "skill": "email-triage" })).unwrap();
     vec![
         ToolCall {
+            call_id: String::new(),
+            provider_metadata: None,
             name: "load_skill_tool".into(),
             input: Some(skill),
             open: false,
@@ -45,6 +71,8 @@ pub fn mock_tools() -> Vec<ToolCall> {
             error: None,
         },
         ToolCall {
+            call_id: String::new(),
+            provider_metadata: None,
             name: "schedule_task_tool".into(),
             input: Some(schedule),
             open: false,
@@ -54,11 +82,22 @@ pub fn mock_tools() -> Vec<ToolCall> {
     ]
 }
 
+/// A scripted exchange, for the agents whose turns depend on the history they are sent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MockScript {
+    /// Ends the first request on a pending `throw_confetti` client call, and answers the
+    /// request that carries its result with text.
+    Confetti,
+}
+
+const CONFETTI_CALL_ID: &str = "mock_confetti_1";
+
 /// Emits a canned response in small chunks, for tests, snapshots and `--mock`.
 pub struct MockAgent {
     pub response: &'static str,
     pub chunk_chars: usize,
     pub tools: Vec<ToolCall>,
+    pub script: Option<MockScript>,
 }
 
 impl AgentClient for MockAgent {
@@ -72,10 +111,14 @@ impl AgentClient for MockAgent {
 
     fn stream(
         &self,
-        _history: &[ChatMessage],
+        history: &[ChatMessage],
         _conversation: Option<&str>,
         emit: &mut dyn FnMut(StreamEvent),
     ) -> Result<(), String> {
+        if self.script == Some(MockScript::Confetti) {
+            confetti_script(history, emit);
+            return Ok(());
+        }
         for tool in &self.tools {
             emit(StreamEvent::ToolUsed(tool.clone()));
         }
@@ -85,6 +128,40 @@ impl AgentClient for MockAgent {
         }
         Ok(())
     }
+}
+
+fn confetti_script(history: &[ChatMessage], emit: &mut dyn FnMut(StreamEvent)) {
+    emit(StreamEvent::StepStart);
+    let answered = history.last().is_some_and(|m| {
+        m.parts.iter().any(|part| {
+            matches!(part, Part::Tool(tool)
+                if tool.call_id == CONFETTI_CALL_ID && tool.state != ToolState::InputAvailable)
+        })
+    });
+    if answered {
+        emit(StreamEvent::TextDelta("Confetti is flying.".into()));
+        return;
+    }
+    let input = json!({ "count": 50 });
+    emit(StreamEvent::TextDelta("Let's celebrate.".into()));
+    emit(StreamEvent::ToolStarted {
+        call_id: CONFETTI_CALL_ID.into(),
+        name: "throw_confetti".into(),
+    });
+    emit(StreamEvent::ToolUsed(ToolCall {
+        call_id: CONFETTI_CALL_ID.into(),
+        provider_metadata: None,
+        name: "throw_confetti".into(),
+        input: serde_json::to_string_pretty(&input).ok(),
+        request: None,
+        error: None,
+        open: false,
+    }));
+    emit(StreamEvent::ClientToolsPending(vec![PendingCall {
+        call_id: CONFETTI_CALL_ID.into(),
+        name: "throw_confetti".into(),
+        input,
+    }]));
 }
 
 const DEMO_REPLY: &str = "Wide feet work best with a **Cushioned Series** shoe — the search above pulled the current guides.\n\nA few things worth knowing:\n\n- Pair them with insoles that add *arch support*\n- The width matters more than the brand\n- The tier list below changes with every release\n\nWant me to compare two shoes side by side?";
@@ -164,15 +241,25 @@ pub fn mock_directory() -> Arc<dyn AgentDirectory> {
     })
 }
 
-/// The mock client: the demo's by `AS_GUI_DEMO=1`, otherwise the plain canned one.
+/// The mock client: the demo's by `AS_GUI_DEMO=1`, the client-tool script's by
+/// `AS_GUI_MOCK_CLIENT_TOOL=1`, otherwise the plain canned one.
 pub fn mock_client() -> Arc<dyn AgentClient> {
     if demo_mode() {
         return Arc::new(DemoAgent);
+    }
+    if std::env::var_os("AS_GUI_MOCK_CLIENT_TOOL").is_some_and(|v| v == "1") {
+        return Arc::new(MockAgent {
+            response: "",
+            chunk_chars: 4,
+            tools: Vec::new(),
+            script: Some(MockScript::Confetti),
+        });
     }
     Arc::new(MockAgent {
         response: MOCK_REPLY,
         chunk_chars: 24,
         tools: mock_tools(),
+        script: None,
     })
 }
 
@@ -212,6 +299,7 @@ mod tests {
             response: "Hello there",
             chunk_chars: 4,
             tools: Vec::new(),
+            script: None,
         }
         .stream(&[], None, &mut |ev| {
             if let StreamEvent::TextDelta(t) = ev {
@@ -230,6 +318,7 @@ mod tests {
             response: "Hi",
             chunk_chars: 4,
             tools: mock_tools(),
+            script: None,
         }
         .stream(&[], None, &mut |ev| match ev {
             StreamEvent::ToolUsed(t) => names.push(t.name),
@@ -239,6 +328,59 @@ mod tests {
         .unwrap();
         assert_eq!(names, ["load_skill_tool", "schedule_task_tool"]);
         assert_eq!(text, "Hi");
+    }
+
+    fn confetti_agent() -> MockAgent {
+        MockAgent {
+            response: "",
+            chunk_chars: 4,
+            tools: Vec::new(),
+            script: Some(MockScript::Confetti),
+        }
+    }
+
+    #[test]
+    fn the_confetti_script_ends_its_first_request_on_a_pending_client_call() {
+        let mut events = Vec::new();
+        confetti_agent()
+            .stream(&[ChatMessage::user("u1", "party")], None, &mut |e| {
+                events.push(e)
+            })
+            .unwrap();
+        let Some(StreamEvent::ClientToolsPending(calls)) = events.last() else {
+            panic!("the request ends on the pending call: {events:?}");
+        };
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "throw_confetti");
+        assert_eq!(calls[0].call_id, CONFETTI_CALL_ID);
+    }
+
+    #[test]
+    fn the_confetti_script_answers_a_history_that_ends_with_the_calls_result() {
+        let mut reply = ChatMessage::assistant("m2");
+        reply.parts = vec![
+            Part::StepStart,
+            Part::Tool(ToolPart {
+                call_id: CONFETTI_CALL_ID.into(),
+                name: "throw_confetti".into(),
+                input: json!({ "count": 50 }),
+                state: ToolState::OutputAvailable,
+                output: Some(json!({ "ok": true })),
+                error: None,
+                provider_metadata: None,
+            }),
+        ];
+        let history = [ChatMessage::user("u1", "party"), reply];
+        let mut events = Vec::new();
+        confetti_agent()
+            .stream(&history, None, &mut |e| events.push(e))
+            .unwrap();
+        assert!(
+            events
+                .iter()
+                .all(|e| !matches!(e, StreamEvent::ClientToolsPending(_)))
+        );
+        assert!(events.contains(&StreamEvent::TextDelta("Confetti is flying.".into())));
     }
 
     #[test]

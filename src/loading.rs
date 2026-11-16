@@ -206,6 +206,7 @@ impl Chat {
                 .sessions
                 .get(self.current)
                 .is_some_and(|s| s.history.is_pending(now))
+            || (self.agent_panel.is_some() && self.agent_config.load.is_pending(now))
     }
 
     fn views_at(&self, now: f64) -> Views {
@@ -221,14 +222,24 @@ impl Chat {
     /// already rebuild the view by themselves.
     pub fn track_views(&mut self, now: f64, tx: &mut Tx) -> bool {
         let (before, after) = (self.views_at(self.last_poll), self.views_at(now));
+        let sheet_before = self.agent_sheet_phase(self.last_poll);
+        let sheet_after = self.agent_sheet_phase(now);
         self.last_poll = now;
         let pulsing = after.1 == SidebarView::Skeleton
             || after.2 == PaneView::Skeleton
-            || matches!(after.0, Screen::Splash { spinner: true });
+            || matches!(after.0, Screen::Splash { spinner: true })
+            || sheet_after == Some(Phase::Skeleton);
         if self.loading_visible_or_due(now) {
             tx.wake_after(Duration::from_millis(if pulsing { 33 } else { 40 }));
         }
-        before != after || pulsing
+        before != after || sheet_before != sheet_after || pulsing
+    }
+
+    /// What the open agent sheet's config load shows; `None` while the sheet is shut.
+    fn agent_sheet_phase(&self, now: f64) -> Option<Phase> {
+        self.agent_panel
+            .is_some()
+            .then(|| self.agent_config.load.phase(now))
     }
 }
 
@@ -286,5 +297,21 @@ mod tests {
         let load = Load::Idle.finished(3.0);
         assert_eq!(load.phase(3.0), Phase::Done);
         assert!(load.is_settled());
+    }
+
+    #[test]
+    fn an_open_agent_sheet_keeps_frames_coming_while_its_config_loads() {
+        let mut chat = Chat::new(crate::agent::mock_client(), crate::agent::mock_directory());
+        chat.agent_config.load = Load::Loading { since: 0.0 }.finished(0.2);
+        assert!(
+            !chat.loading_visible_or_due(0.3),
+            "no sheet, nothing to time"
+        );
+        chat.agent_panel = Some(Default::default());
+        assert!(
+            chat.loading_visible_or_due(0.3),
+            "the held skeleton is due to go"
+        );
+        assert!(!chat.loading_visible_or_due(0.5));
     }
 }

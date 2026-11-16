@@ -1,5 +1,8 @@
 //! Algolia Agent Studio client: the AI SDK v5 data-stream protocol over SSE.
 
+mod builtin_tools;
+mod client_tools;
+mod commands;
 mod history;
 mod http;
 mod mock;
@@ -7,6 +10,9 @@ mod model;
 mod search;
 mod sse;
 
+pub use builtin_tools::*;
+pub use client_tools::*;
+pub use commands::*;
 pub use history::*;
 pub use http::*;
 pub use mock::*;

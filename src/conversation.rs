@@ -6,10 +6,10 @@ use rune::{
     Color, El, RichStyle, ScrollSpec, Span, Transition, Tx, auto_grow, col, effect, el, icon, rich,
     row, spacer, text, text_input,
 };
-use rune_kit::{IconButton, IconButtonVariant, Markdown, Spinner, State};
+use rune_kit::{ButtonVariant, IconButton, IconButtonVariant, Markdown, Spinner, State};
 
-use crate::agent::{ChatMessage, Role, SearchHit, ToolCall};
-use crate::chat::Chat;
+use crate::agent::{ChatMessage, Handler, Role, SearchHit, ToolCall};
+use crate::chat::{CallState, Chat, ClientCall};
 use crate::loading::PaneView;
 
 /// The empty transcript's starter prompts, filling the composer when pressed.
@@ -451,6 +451,9 @@ fn search_button(k: &rune_kit::Kit, message_id: &str, index: usize) -> El {
 /// payload or failure beneath on the same surface.
 fn tool_step(s: &Chat, k: &rune_kit::Kit, message_id: &str, index: usize, tool: &ToolCall) -> El {
     let hits = tool.input.as_deref().and_then(SearchHit::from_json);
+    let call = s.client_call(&tool.call_id);
+    let state = s.client_state(&tool.call_id);
+    let awaiting = state == Some(&CallState::Awaiting);
     let mut card = col()
         .key(format!("tool-step-{}", tool.name))
         .w_full()
@@ -460,8 +463,26 @@ fn tool_step(s: &Chat, k: &rune_kit::Kit, message_id: &str, index: usize, tool: 
         .border(1.0, k.c.border_base)
         .border_layout()
         .clip_rounded(satellite::RADIUS_CARD)
-        .child(tool_header(k, message_id, index, tool, hits.as_deref()));
-    if tool.open {
+        .child(tool_header(
+            k,
+            message_id,
+            index,
+            tool,
+            hits.as_deref(),
+            state,
+        ));
+    match call.map(|call| &call.state) {
+        Some(CallState::Awaiting) => card = card.child(approval(s, k, call.expect("matched"))),
+        Some(CallState::Running) => card = card.child(running_row(k, &tool.call_id)),
+        _ => {}
+    }
+    if state.is_some()
+        && !tool.open
+        && let Some(error) = &tool.error
+    {
+        card = card.child(step_error(k, &tool.name, error));
+    }
+    if tool.open && !awaiting {
         match (&hits, &tool.input) {
             (Some(hits), _) => {
                 card = card.child(hit_list(s, k, message_id, index, &tool.name, hits))
@@ -476,6 +497,28 @@ fn tool_step(s: &Chat, k: &rune_kit::Kit, message_id: &str, index: usize, tool: 
     card
 }
 
+/// What a call the app runs says about itself, in words: where it stands, and for one that
+/// ran, that it ran on this Mac.
+fn client_facts(k: &rune_kit::Kit, name: &str, state: &CallState) -> Vec<El> {
+    let (status, color) = match state {
+        CallState::Awaiting => ("Waiting for you", k.c.text_muted),
+        CallState::Running => ("Running on this Mac", k.c.text_muted),
+        CallState::Resolved(Ok(_)) => ("Done", k.c.text_muted),
+        CallState::Resolved(Err(_)) => ("Failed", k.c.danger.fg),
+        CallState::Declined => ("Declined", k.c.text_muted),
+    };
+    let mut facts = vec![
+        text(status)
+            .key(format!("tool-status-{name}"))
+            .font(k.ty.ui)
+            .color(color),
+    ];
+    if matches!(state, CallState::Resolved(_)) {
+        facts.push(text("On this Mac").font(k.ty.ui).color(k.c.text_muted));
+    }
+    facts
+}
+
 /// A step's header: icon, what it did, the query and what came back, then the search
 /// action and the disclosure, all on one line.
 fn tool_header(
@@ -484,6 +527,7 @@ fn tool_header(
     index: usize,
     tool: &ToolCall,
     hits: Option<&[SearchHit]>,
+    state: Option<&CallState>,
 ) -> El {
     let id = message_id.to_string();
     let name = tool.name.clone();
@@ -491,7 +535,12 @@ fn tool_header(
     let expandable = tool.input.is_some() || failed;
     let search = tool.search_request();
     let glyph = step_glyph(tool);
-    let label = step_label(tool);
+    let label = match state {
+        Some(CallState::Awaiting) => format!("Run {}?", tool.name),
+        Some(CallState::Running) => format!("Running {}", tool.name),
+        Some(CallState::Declined) => format!("Did not run {}", tool.name),
+        Some(CallState::Resolved(_)) | None => step_label(tool),
+    };
     let mut facts: Vec<El> = Vec::new();
     if let Some(query) = search.as_ref().filter(|q| !q.query.is_empty()) {
         facts.push(
@@ -513,7 +562,9 @@ fn tool_header(
             .color(k.c.text_muted),
         );
     }
-    if failed {
+    if let Some(state) = state {
+        facts.extend(client_facts(k, &tool.name, state));
+    } else if failed {
         facts.push(
             text("Failed")
                 .key(format!("tool-failed-{}", tool.name))
@@ -568,6 +619,182 @@ fn step_section(k: &rune_kit::Kit, key: String, fill: Color, body: El) -> El {
         .fill(fill)
         .border_sides([1.0, 0.0, 0.0, 0.0], k.c.border_base)
         .child(body)
+}
+
+/// What a call waiting for the user shows: its arguments, what Run will do, and the buttons.
+fn approval(s: &Chat, k: &rune_kit::Kit, call: &ClientCall) -> El {
+    let id = call.call_id.clone();
+    let name = call.name.clone();
+    let arguments = serde_json::to_string_pretty(&call.input).unwrap_or_default();
+    let handler = s.client_tools.handler(&name);
+    let mut body = col()
+        .key(format!("approval-{id}"))
+        .role("group")
+        .label(format!("{name}, waiting for your approval"))
+        .w_full()
+        .min_w(0.0)
+        .px(12.0)
+        .py(8.0)
+        .gap(8.0)
+        .child(
+            text("Waiting for your approval")
+                .font(k.ty.text_small)
+                .color(k.c.text_muted)
+                .live_region(rune::LiveRegion::Polite),
+        );
+    let mut actions = row().w_full().gap(8.0).center_y();
+    match &handler {
+        Handler::Command { program, args } => {
+            body = body.child(
+                text(format!(
+                    "Runs {} without a shell",
+                    display_command(program, args)
+                ))
+                .key(format!("approval-command-{id}"))
+                .wrap_anywhere()
+                .font(typography::CODE)
+                .color(k.c.text_base),
+            );
+        }
+        Handler::Builtin => {}
+        Handler::Ask => {
+            body = body
+                .child(
+                    text(format!(
+                        "Nothing handles {name} yet. Type the result to send back, or decline."
+                    ))
+                    .wrap()
+                    .font(k.ty.text_small)
+                    .color(k.c.text_muted),
+                )
+                .children(result_field(s, k, &id, &name));
+        }
+    }
+    if handler == Handler::Ask {
+        actions = actions.child(
+            satellite::button("Send result")
+                .variant(ButtonVariant::Contrast)
+                .on_press({
+                    let id = id.clone();
+                    move |s: &mut Chat| s.send_manual_result(&id)
+                })
+                .sized(k, satellite::Size::Small)
+                .label(format!("Send result for {name}"))
+                .key(format!("approval-send-{id}")),
+        );
+    } else {
+        actions = actions.child(
+            satellite::button("Run")
+                .variant(ButtonVariant::Contrast)
+                .on_press({
+                    let id = id.clone();
+                    move |s: &mut Chat| s.approve_client_call(&id)
+                })
+                .sized(k, satellite::Size::Small)
+                .label(format!("Run {name}"))
+                .key(format!("approval-run-{id}")),
+        );
+    }
+    if handler == Handler::Ask {
+        actions = actions.child(
+            satellite::button("Set up a handler…")
+                .variant(ButtonVariant::Ghost)
+                .on_press({
+                    let name = name.clone();
+                    move |s: &mut Chat| s.open_agent_panel(Some(name.clone()))
+                })
+                .sized(k, satellite::Size::Small)
+                .label(format!("Set up a handler for {name}"))
+                .key(format!("approval-setup-{id}")),
+        );
+    }
+    actions = actions.child(
+        satellite::button("Decline")
+            .variant(ButtonVariant::Outline)
+            .on_press({
+                let id = id.clone();
+                move |s: &mut Chat| s.decline_client_call(&id)
+            })
+            .sized(k, satellite::Size::Small)
+            .label(format!("Decline {name}"))
+            .key(format!("approval-decline-{id}")),
+    );
+    col()
+        .w_full()
+        .min_w(0.0)
+        .child(step_json(k, &format!("approval-{id}"), &arguments))
+        .child(step_section(
+            k,
+            format!("approval-actions-{id}"),
+            k.c.bg_base,
+            body.child(actions),
+        ))
+}
+
+/// The field a call nothing handles takes its result in.
+fn result_field(s: &Chat, k: &rune_kit::Kit, id: &str, name: &str) -> Option<El> {
+    let reply = s.client_reply(id)?;
+    let field = text_input(reply, typography::BODY)
+        .key(format!("approval-field-{id}"))
+        .w_full()
+        .color(k.c.text_base)
+        .rich_style(rich_style(k))
+        .placeholder("Result to send back…", k.c.text_muted)
+        .caret(k.c.text_base, k.selection())
+        .label(format!("Result for {name}"))
+        .no_focus_ring()
+        .on_edit({
+            let id = id.to_string();
+            move |s: &mut Chat| s.manual_reply(&id)
+        })
+        .on_submit({
+            let id = id.to_string();
+            move |s: &mut Chat, _: &mut Tx| s.send_manual_result(&id)
+        });
+    Some(
+        col()
+            .w_full()
+            .px(8.0)
+            .py(6.0)
+            .radius(4.0)
+            .border(1.0, satellite::elevation::field_border())
+            .focus_within_ring(1.0, -1.0, k.c.border_focus)
+            .child(auto_grow(field, 1, 6)),
+    )
+}
+
+fn running_row(k: &rune_kit::Kit, id: &str) -> El {
+    step_section(
+        k,
+        format!("approval-running-{id}"),
+        k.c.bg_base,
+        row().w_full().px(12.0).py(8.0).child(
+            text("Running…")
+                .font(k.ty.text_small)
+                .color(k.c.text_muted)
+                .live_region(rune::LiveRegion::Polite),
+        ),
+    )
+}
+
+/// A command as it will run, each argument quoted when it holds anything a shell would split.
+pub(crate) fn display_command(program: &str, args: &[String]) -> String {
+    let quote = |part: &str| {
+        if !part.is_empty()
+            && part
+                .chars()
+                .all(|c| c.is_alphanumeric() || "-_./=:@".contains(c))
+        {
+            part.to_string()
+        } else {
+            format!("'{}'", part.replace('\'', "'\\''"))
+        }
+    };
+    std::iter::once(program)
+        .chain(args.iter().map(String::as_str))
+        .map(quote)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn step_json(k: &rune_kit::Kit, name: &str, input: &str) -> El {

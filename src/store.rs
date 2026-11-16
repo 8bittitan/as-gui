@@ -24,6 +24,35 @@ pub struct SavedApplication {
     /// The application's colour id (`AppColour::id`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub colour: Option<String>,
+    /// Per-agent settings, by agent id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agents: BTreeMap<String, SavedAgent>,
+}
+
+/// What the user set for one agent.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedAgent {
+    /// How each client tool is handled, by tool name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tools: BTreeMap<String, ToolBinding>,
+}
+
+/// What runs a client tool when the agent calls it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "handler", rename_all = "lowercase")]
+pub enum ToolBinding {
+    Command {
+        program: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        args: Vec<String>,
+        #[serde(default = "default_timeout_secs")]
+        timeout_secs: u64,
+    },
+    Ask,
+}
+
+fn default_timeout_secs() -> u64 {
+    crate::agent::CLIENT_TOOL_TIMEOUT.as_secs()
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,6 +247,73 @@ mod tests {
         assert_eq!(mode(path.parent().unwrap()), 0o700);
     }
 
+    fn application_with(agents: BTreeMap<String, SavedAgent>) -> SavedApplication {
+        SavedApplication {
+            app_id: "ABCD1234".into(),
+            api_key: "k".into(),
+            agents,
+            ..SavedApplication::default()
+        }
+    }
+
+    #[test]
+    fn a_tool_binding_round_trips_under_its_application_and_agent() {
+        let path = state_path("tool-bindings");
+        let agent = SavedAgent {
+            tools: BTreeMap::from([(
+                "export_report".to_string(),
+                ToolBinding::Command {
+                    program: "/usr/local/bin/export".into(),
+                    args: vec!["--fast".into(), "two words".into()],
+                    timeout_secs: 30,
+                },
+            )]),
+        };
+        let state = Persisted {
+            applications: vec![
+                application_with(BTreeMap::from([("agent-1".to_string(), agent.clone())])),
+                SavedApplication {
+                    app_id: "OTHER5678".into(),
+                    api_key: "k".into(),
+                    ..SavedApplication::default()
+                },
+            ],
+            ..Persisted::default()
+        };
+        save_to(&path, &state);
+        let loaded = load_from(&path);
+        assert_eq!(loaded.applications[0].agents["agent-1"], agent);
+        assert!(loaded.applications[1].agents.is_empty());
+    }
+
+    #[test]
+    fn a_file_from_before_agent_settings_loads_and_is_written_back_unchanged() {
+        let path = state_path("old-file");
+        std::fs::write(
+            &path,
+            r#"{"applications":[{"app_id":"ABCD1234","api_key":"k"}]}"#,
+        )
+        .unwrap();
+        let loaded = load_from(&path);
+        assert!(loaded.applications[0].agents.is_empty());
+        let json = serde_json::to_string(&loaded).unwrap();
+        assert!(!json.contains("agents"), "{json}");
+    }
+
+    #[test]
+    fn a_command_binding_without_a_timeout_gets_the_default() {
+        let binding: ToolBinding =
+            serde_json::from_str(r#"{"handler":"command","program":"/bin/x"}"#).unwrap();
+        assert_eq!(
+            binding,
+            ToolBinding::Command {
+                program: "/bin/x".into(),
+                args: Vec::new(),
+                timeout_secs: 20,
+            }
+        );
+    }
+
     #[test]
     fn saved_state_round_trips() {
         let path = state_path("round-trip");
@@ -229,6 +325,7 @@ mod tests {
                 last_agent_id: Some("alg_agt_1".into()),
                 last_agent_name: Some("Shopping".into()),
                 colour: Some("teal".into()),
+                agents: BTreeMap::new(),
             }],
             active_app: Some("ABCD1234".into()),
             agent_id: None,

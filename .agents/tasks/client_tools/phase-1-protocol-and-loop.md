@@ -1,6 +1,6 @@
 # Phase 1: Protocol and loop
 
-**Status:** todo
+**Status:** done
 **Goal:** a turn can end on pending client tool calls, wait for their results, and continue under the same assistant message. Nothing runs a real tool yet: results come from a fake `ClientTools` and the mock agent. No new UI beyond what the existing tool card already shows.
 
 ## Where the code stands
@@ -86,12 +86,12 @@ Whole app, in `src/tests/client_tools.rs`:
 
 ## Done when
 
-- [ ] `parts` recorded in stream order, and loaded history builds them
-- [ ] `merge_tool` matches by `call_id`
-- [ ] `ClientToolsPending` emitted by the decoder
-- [ ] Request body replays the trailing message
-- [ ] `ClientTools` trait with a fake; worker with a 20 s timeout
-- [ ] `src/chat/client_tools.rs`, one `apply_at` arm, one `poll` call
-- [ ] Mock script and `src/tests/client_tools.rs`
-- [ ] `ARCHITECTURE.md` updated
-- [ ] `just check`, default-feature clippy and tests pass
+- [x] `parts` recorded in stream order, and loaded history builds them
+- [x] `merge_tool` matches by `call_id`
+- [x] `ClientToolsPending` emitted by the decoder
+- [x] Request body replays the trailing message
+- [x] `ClientTools` trait with a fake; worker with a 20 s timeout
+- [x] `src/chat/client_tools.rs`, one `apply_at` arm, one `poll` call
+- [x] Mock script and `src/tests/client_tools.rs`
+- [x] `ARCHITECTURE.md` updated
+- [x] `just check`, default-feature clippy and tests pass

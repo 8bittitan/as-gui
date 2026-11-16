@@ -1,10 +1,19 @@
 //! Deterministic state fixtures for rune's `--scene` argument, so headless snapshots and
 //! trees can start from a chosen screen without credentials or scripts.
 
-use crate::agent::{AgentInfo, AgentStatus, ChatMessage, ToolCall, TraceSpan, TurnTrace};
-use crate::chat::{Application, Chat, Session};
+use std::sync::Arc;
+
+use serde_json::{Value, json};
+
+use crate::agent::{
+    AgentConfig, AgentInfo, AgentStatus, ChatMessage, ClientToolDecl, ClientTools, PendingCall,
+    ToolCall, TraceSpan, TurnTrace,
+};
+use crate::chat::agent_panel::AgentPanel;
+use crate::chat::{Application, CallState, Chat, Session};
 use crate::loading::Load;
 use crate::palette::AppColour;
+use crate::store::ToolBinding;
 
 fn with_scene_agent(s: &mut Chat) {
     s.selected_agent = Some(AgentInfo {
@@ -133,6 +142,8 @@ pub fn tools(s: &mut Chat) {
     a.streaming = false;
     a.thought = Some(4.0);
     a.tools = vec![ToolCall {
+        call_id: String::new(),
+        provider_metadata: None,
         name: "algolia_search_index_products_markdown".into(),
         input: Some(
             serde_json::to_string_pretty(&serde_json::json!({
@@ -151,6 +162,8 @@ pub fn tools(s: &mut Chat) {
      error: None, }]
     .into_iter()
     .chain([ToolCall {
+        call_id: String::new(),
+        provider_metadata: None,
         name: "search_tool".into(),
         input: Some(
             serde_json::to_string_pretty(&serde_json::json!({
@@ -204,6 +217,8 @@ pub fn tool_error(s: &mut Chat) {
     let m = s.sessions[s.current].messages.last_mut().unwrap();
     let reason = "Cannot search in `brand` attribute, you need to add `searchable(brand)` to attributesForFaceting. (Correlation-ID: EXAMPLE-0aBcD-0123456789abcdef)";
     m.tools.push(ToolCall {
+        call_id: String::new(),
+        provider_metadata: None,
         name: "algolia_search_for_facet_values".into(),
         input: Some(
             "{\n  \"facetName\": \"brand\",\n  \"indexName\": \"products_markdown\"\n}".into(),
@@ -222,6 +237,7 @@ pub fn tool_error(s: &mut Chat) {
         output: None,
         error: Some(reason.into()),
         open: false,
+        client: None,
     });
 }
 
@@ -242,6 +258,7 @@ pub fn timeline(s: &mut Chat) {
         output: None,
         error: None,
         open: false,
+        client: None,
     };
     let search = span("c1", "search_tool", 0.6, 2.0, 1);
     let index = span("c2", "algolia_search_index_products_markdown", 0.9, 1.5, 0);
@@ -383,4 +400,123 @@ pub fn command_bar_query(s: &mut Chat) {
     command_bar(s);
     s.command_bar.query = rune::TextEdit::new("se");
     s.command_bar.query.focused = true;
+}
+
+/// Stands in for the real registry: it answers every call as a built-in would.
+struct SceneTools;
+
+impl ClientTools for SceneTools {
+    fn run(&self, _: &str, _: &Value) -> Result<Value, String> {
+        Ok(Value::Null)
+    }
+}
+
+/// A turn that ended on a call to `name`: the reply so far, the call's card, and the call
+/// in `state`.
+fn client_call_turn(s: &mut Chat, name: &str, input: Value, state: CallState) {
+    with_scene_agent(s);
+    let session = &mut s.sessions[s.current];
+    session.title = "Client tool".into();
+    session
+        .messages
+        .push(ChatMessage::user("u1", "Open the docs for InstantSearch"));
+    let mut a = ChatMessage::assistant("a1");
+    a.text = "I'll open the page for you.".into();
+    a.tools = vec![ToolCall {
+        call_id: "scene_call_1".into(),
+        provider_metadata: None,
+        name: name.into(),
+        input: serde_json::to_string_pretty(&input).ok(),
+        open: false,
+        request: None,
+        error: None,
+    }];
+    session.messages.push(a);
+    s.pending = true;
+    s.scene_call(
+        PendingCall {
+            call_id: "scene_call_1".into(),
+            name: name.into(),
+            input,
+        },
+        state,
+    );
+}
+
+fn open_docs() -> Value {
+    json!({ "url": "https://www.algolia.com/doc/guides/building-search-ui/what-is-instantsearch/js/" })
+}
+
+/// A built-in call waiting for Run or Decline.
+pub fn client_tool_approval(s: &mut Chat) {
+    s.client_tools = Arc::new(SceneTools);
+    client_call_turn(s, "open_url", open_docs(), CallState::Awaiting);
+}
+
+/// A call nothing handles: the card asks for a result to send back.
+pub fn client_tool_manual(s: &mut Chat) {
+    client_call_turn(
+        s,
+        "export_report",
+        json!({ "format": "csv", "range": "last_7_days" }),
+        CallState::Awaiting,
+    );
+}
+
+/// A call Run was pressed on, still going.
+pub fn client_tool_running(s: &mut Chat) {
+    s.client_tools = Arc::new(SceneTools);
+    client_call_turn(s, "open_url", open_docs(), CallState::Running);
+}
+
+/// The agent sheet: one declared tool, and a binding for a tool the agent dropped.
+pub fn agent_panel(s: &mut Chat) {
+    conversation(s);
+    s.persist_path = None;
+    let _ = s.set_binding(
+        "old_export",
+        ToolBinding::Command {
+            program: "/usr/local/bin/export-report".into(),
+            args: vec!["--format".into(), "csv".into()],
+            timeout_secs: 30,
+        },
+    );
+    let _ = s.set_binding(
+        "export_report",
+        ToolBinding::Command {
+            program: "/usr/local/bin/export-report".into(),
+            args: vec![
+                "--format".into(),
+                "csv".into(),
+                "--output".into(),
+                "/Users/me/Reports/last week.csv".into(),
+            ],
+            timeout_secs: 30,
+        },
+    );
+    s.agent_config.config = Some(AgentConfig {
+        name: "Scene agent".into(),
+        description: Some(
+            "Answers questions about the product catalog and can export a report on request."
+                .into(),
+        ),
+        status: AgentStatus::Published,
+        model: Some("gpt-5".into()),
+        client_tools: vec![ClientToolDecl {
+            name: "export_report".into(),
+            description: Some("Exports a sales report as a file on the user's Mac".into()),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "format": { "type": "string", "enum": ["csv", "json"] },
+                    "range": { "type": "string" }
+                },
+                "required": ["format"]
+            })),
+            is_terminal: false,
+        }],
+        other_tools: vec!["search_tool".into(), "load_skill_tool".into()],
+    });
+    s.agent_config.load = Load::Idle.finished(0.0);
+    s.agent_panel = Some(AgentPanel::default());
 }

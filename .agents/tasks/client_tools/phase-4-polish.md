@@ -1,6 +1,6 @@
 # Phase 4: Polish
 
-**Status:** todo (needs Phase 3)
+**Status:** done
 **Goal:** the feature reads clearly, Quick Ask behaves sensibly, and scenes cover every new state.
 
 ## What to do
@@ -40,9 +40,9 @@ Take all the snapshots in **one** shell command (they share one binary). Use `AS
 
 ## Done when
 
-- [ ] Card labels and the timeline segments
-- [ ] Quick Ask shows the call and offers to continue in the main window
-- [ ] Four scenes, snapshots reviewed in both themes
-- [ ] Docs updated
-- [ ] Review with `better-interface`
-- [ ] `just check`, default-feature clippy and tests pass
+- [x] Card labels and the timeline segments
+- [x] Quick Ask shows the call and offers to continue in the main window
+- [x] Four scenes, snapshots reviewed in both themes
+- [x] Docs updated
+- [x] Review with `better-interface`
+- [x] `just check`, default-feature clippy and tests pass

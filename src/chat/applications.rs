@@ -1,6 +1,7 @@
 //! The saved Algolia applications: adding, switching, renaming and removing them, and the
 //! [`Connector`] that turns one into an API client and agent directory.
 
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -29,6 +30,8 @@ pub struct Application {
     pub last_agent: Option<(String, String)>,
     /// What tells it apart at a glance: the header dot and the window's top bar.
     pub colour: AppColour,
+    /// What the user set per agent, by agent id.
+    pub agents: BTreeMap<String, store::SavedAgent>,
 }
 
 impl Application {
@@ -39,6 +42,7 @@ impl Application {
             label: None,
             last_agent: None,
             colour: AppColour::default(),
+            agents: BTreeMap::new(),
         }
     }
 
@@ -77,6 +81,7 @@ impl Application {
                 .as_deref()
                 .and_then(AppColour::from_id)
                 .unwrap_or_else(|| AppColour::by_position(index)),
+            agents: saved.agents.clone(),
         }
     }
 
@@ -88,6 +93,7 @@ impl Application {
             last_agent_id: self.last_agent.as_ref().map(|a| a.0.clone()),
             last_agent_name: self.last_agent.as_ref().map(|a| a.1.clone()),
             colour: Some(self.colour.id().to_string()),
+            agents: self.agents.clone(),
         }
     }
 }
@@ -293,6 +299,7 @@ impl Chat {
     fn reset_for_application(&mut self) {
         self.cancel_turn();
         self.generation += 1;
+        self.forget_agent_config();
         self.agents.clear();
         self.agents_load = Load::Idle;
         self.launch = Load::Idle;

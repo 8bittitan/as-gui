@@ -28,6 +28,7 @@ fn with_two_apps(mut rt: Runtime<Chat>) -> Runtime<Chat> {
                 response: "Hi!",
                 chunk_chars: 2,
                 tools: Vec::new(),
+                script: None,
             });
             let id = application.app_id[..3].to_lowercase();
             let directory: Arc<dyn crate::agent::AgentDirectory> = Arc::new(MockDirectory {
@@ -114,6 +115,11 @@ impl AgentDirectory for Held {
     fn sessions(&self, agent_id: &str) -> Result<Vec<SessionInfo>, String> {
         self.wait();
         self.inner.sessions(agent_id)
+    }
+
+    fn agent(&self, agent_id: &str) -> Result<crate::agent::AgentConfig, String> {
+        self.wait();
+        self.inner.agent(agent_id)
     }
 
     fn conversation(&self, agent_id: &str, id: &str) -> Result<Vec<ChatMessage>, String> {

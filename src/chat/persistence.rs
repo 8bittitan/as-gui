@@ -49,6 +49,7 @@ impl Chat {
 
     /// Writes the last selected agent and the appearance settings, when persistence is on.
     pub(super) fn persist(&self) {
+        self.sync_bindings();
         let Some(path) = self.persist_path.as_ref() else {
             return;
         };

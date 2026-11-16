@@ -34,6 +34,10 @@ impl AgentDirectory for Gated {
         Ok(lists.get(which).cloned().unwrap_or_default())
     }
 
+    fn agent(&self, _: &str) -> Result<crate::agent::AgentConfig, String> {
+        Err("no config".into())
+    }
+
     fn conversation(&self, _: &str, _: &str) -> Result<Vec<ChatMessage>, String> {
         self.wait();
         match &self.history_error {

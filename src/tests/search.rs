@@ -52,6 +52,8 @@ fn searched_chat(tool: &str, input: &str) -> (Runtime<Chat>, String) {
         );
         s.apply_at(
             StreamEvent::ToolUsed(ToolCall {
+                call_id: String::new(),
+                provider_metadata: None,
                 name: tool.into(),
                 input: Some(input.into()),
                 request: None,
