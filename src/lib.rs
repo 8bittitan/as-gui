@@ -238,10 +238,23 @@ pub fn run() {
             main: chat.clone(),
             panel: panel.handle(),
         };
+        let tool_shell = menubar::RuneShell {
+            main: chat.clone(),
+            panel: panel.handle(),
+        };
         let menu_target = chat.clone();
         chat.update(move |chat, _| {
             chat.attach_registrar(std::rc::Rc::new(quick_ask::PanelShortcuts::new(shortcuts)));
             chat.attach_shell(std::rc::Rc::new(shell));
+            chat.client_tools = Arc::new(agent::Registry::new(
+                agent::Builtins {
+                    shell: Arc::new(tool_shell),
+                    notifier: chat.notifier.clone(),
+                    selection: chat.selection.clone(),
+                },
+                Arc::new(agent::CommandBindings::default()),
+                Arc::new(agent::SystemRunner),
+            ));
             if launch.status_item {
                 menubar::attach_status_item(chat, menu_target, launch.show_window);
             }

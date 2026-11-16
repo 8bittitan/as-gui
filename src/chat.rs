@@ -43,6 +43,7 @@ pub use appearance::{Accent, Appearance, ChatWidth, ThemePref};
 pub use applications::AddApplicationError;
 use applications::algolia_connector;
 pub use applications::{AddApplicationForm, Application, Connector, MOCK_AVAILABLE};
+pub(crate) use client_tools::{CallState, ClientCall};
 use directory::Loaded;
 pub use notifications::focus_changed;
 pub use sessions::Session;
@@ -322,6 +323,6 @@ pub fn poll(s: &mut Chat, t: f64, tx: &mut Tx) -> bool {
     changed |= s.drain_loads();
     changed |= s.track_views(t, tx);
     changed |= s.drain_turn(t);
-    changed |= s.drain_client_tools();
+    changed |= s.drain_client_tools(tx);
     changed
 }

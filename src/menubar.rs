@@ -143,6 +143,8 @@ pub trait AppShell {
     fn set_dock_icon(&self, visible: bool);
     fn toggle_quick_ask(&self);
     fn quit(&self);
+    fn open_url(&self, url: &str);
+    fn copy_text(&self, text: &str);
 }
 
 /// The real shell: Rune's handles to the main window and the Quick Ask panel.
@@ -163,6 +165,18 @@ impl AppShell for RuneShell {
     }
     fn quit(&self) {
         self.main.quit();
+    }
+    fn open_url(&self, url: &str) {
+        let url = url.to_string();
+        self.main.update(move |_, tx| {
+            if let Err(error) = tx.open_url(&url) {
+                tracing::warn!("could not open {url}: {error:?}");
+            }
+        });
+    }
+    fn copy_text(&self, text: &str) {
+        let text = text.to_string();
+        self.main.update(move |_, tx| tx.copy(text));
     }
 }
 
@@ -287,6 +301,8 @@ pub mod fakes {
         fn quit(&self) {
             self.calls.borrow_mut().push(Call::Quit);
         }
+        fn open_url(&self, _: &str) {}
+        fn copy_text(&self, _: &str) {}
     }
 
     #[derive(Clone, Default)]

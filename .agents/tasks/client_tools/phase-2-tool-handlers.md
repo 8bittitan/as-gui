@@ -1,6 +1,6 @@
 # Phase 2: Tool handlers
 
-**Status:** todo (needs Phase 1)
+**Status:** done
 **Goal:** a call waits for the user, then runs a real handler on this Mac. The handlers are a small set of built-in tools, user-defined shell commands, and an "ask the user" fallback.
 
 ## What to do
@@ -66,10 +66,10 @@ Behavior:
 
 ## Done when
 
-- [ ] Registry resolves command, built-in, ask-the-user in that order
-- [ ] Four built-in tools behind their traits, with tests
-- [ ] `CommandRunner` and the shell command handler, with tests
-- [ ] Approval card with Run, Decline and the manual-result field
-- [ ] Focus and announcement for a new approval card
-- [ ] `ARCHITECTURE.md` updated
-- [ ] `just check`, default-feature clippy and tests pass
+- [x] Registry resolves command, built-in, ask-the-user in that order
+- [x] Four built-in tools behind their traits, with tests
+- [x] `CommandRunner` and the shell command handler, with tests
+- [x] Approval card with Run, Decline and the manual-result field
+- [x] Focus and announcement for a new approval card
+- [x] `ARCHITECTURE.md` updated
+- [x] `just check`, default-feature clippy and tests pass

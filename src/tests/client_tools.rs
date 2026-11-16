@@ -6,8 +6,11 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::agent::{
-    AgentClient, ClientTools, FakeClientTools, MockScript, Part, PendingCall, ToolState,
+    AgentClient, Builtins, ClientTools, CommandBinding, CommandBindings, CommandError,
+    CommandOutput, CommandRequest, CommandRunner, FakeClientTools, MockScript, NoClientTools, Part,
+    PendingCall, Registry, ToolState,
 };
+use crate::selection::NoSelection;
 
 fn confetti_agent() -> MockAgent {
     MockAgent {
@@ -151,9 +154,23 @@ fn chat_with(client: Arc<dyn AgentClient>, tools: Arc<dyn ClientTools>) -> Runti
     rt
 }
 
-/// Frames, with the pauses the worker threads need, until `done` holds.
+/// Presses Run on every call waiting for the user.
+fn approve_waiting(rt: &mut Runtime<Chat>) {
+    let waiting: Vec<String> = rt
+        .state
+        .awaiting_calls()
+        .map(|call| call.call_id.clone())
+        .collect();
+    if !waiting.is_empty() {
+        rt.update(move |s, _| waiting.iter().for_each(|id| s.approve_client_call(id)));
+    }
+}
+
+/// Frames, with the pauses the worker threads need, until `done` holds. Calls that wait for
+/// the user are run as they arrive.
 fn drive(rt: &mut Runtime<Chat>, done: impl Fn(&Chat) -> bool) {
     for _ in 0..1000 {
+        approve_waiting(rt);
         rt.frame(1.0 / 60.0);
         if done(&rt.state) {
             return;
@@ -453,5 +470,243 @@ fn text_and_tools_are_recorded_as_parts_in_stream_order() {
         parts[4],
         Part::Text("Found.".into()),
         "the break that separated the paragraphs isn't part of the text"
+    );
+}
+
+const CONFETTI: &str = "mock_confetti_1";
+
+fn run_key() -> String {
+    format!("approval-run-{CONFETTI}")
+}
+
+/// Frames until the element keyed `key` is on screen.
+fn wait_for(rt: &mut Runtime<Chat>, key: &str) {
+    for _ in 0..1000 {
+        rt.frame(1.0 / 60.0);
+        if rt.find(key).is_some() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    panic!("{key} never showed");
+}
+
+fn quiet_frames(rt: &mut Runtime<Chat>) {
+    for _ in 0..30 {
+        rt.frame(1.0 / 60.0);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+fn confetti_result(agent: &RecordingAgent) -> (ToolState, Option<Value>, Option<String>) {
+    let requests = agent.requests();
+    let tool = tool_parts(requests[1].last().unwrap())[0].clone();
+    (tool.state, tool.output, tool.error)
+}
+
+#[test]
+fn a_call_waits_for_the_user_until_run_is_pressed() {
+    let agent = RecordingAgent::confetti();
+    let tools = Arc::new(CountingTools(AtomicUsize::new(0)));
+    let mut rt = chat_with(agent.clone(), tools.clone());
+    rt.update(|s, _| s.send_prompt("Party"));
+
+    wait_for(&mut rt, &run_key());
+    quiet_frames(&mut rt);
+    assert!(rt.state.pending, "the reply waits");
+    assert_eq!(tools.0.load(Ordering::SeqCst), 0, "nothing ran unasked");
+    assert_eq!(agent.requests().len(), 1);
+
+    tap(&mut rt, &run_key());
+    drive(&mut rt, idle);
+
+    assert_eq!(tools.0.load(Ordering::SeqCst), 1);
+    assert_eq!(agent.requests().len(), 2);
+    assert_eq!(confetti_result(&agent).0, ToolState::OutputAvailable);
+    assert!(rt.find(&run_key()).is_none(), "the card's buttons are gone");
+}
+
+#[test]
+fn declining_reaches_the_next_request_as_an_output_error() {
+    let agent = RecordingAgent::confetti();
+    let tools = Arc::new(CountingTools(AtomicUsize::new(0)));
+    let mut rt = chat_with(agent.clone(), tools.clone());
+    rt.update(|s, _| s.send_prompt("Party"));
+    wait_for(&mut rt, &run_key());
+
+    tap(&mut rt, &format!("approval-decline-{CONFETTI}"));
+    drive(&mut rt, idle);
+
+    assert_eq!(
+        tools.0.load(Ordering::SeqCst),
+        0,
+        "a declined call never runs"
+    );
+    let (state, output, error) = confetti_result(&agent);
+    assert_eq!(state, ToolState::OutputError);
+    assert_eq!(output, None);
+    assert_eq!(
+        error.as_deref(),
+        Some("The user declined to run this tool.")
+    );
+}
+
+#[test]
+fn a_call_nothing_handles_takes_a_result_typed_by_the_user() {
+    let agent = RecordingAgent::confetti();
+    let mut rt = chat_with(agent.clone(), Arc::new(NoClientTools));
+    rt.update(|s, _| s.send_prompt("Party"));
+    wait_for(&mut rt, &format!("approval-field-{CONFETTI}"));
+    assert!(rt.find(&run_key()).is_none(), "there is nothing to run");
+
+    rt.update(|s, _| s.manual_reply(CONFETTI).insert("{\"thrown\": 3}"));
+    tap(&mut rt, &format!("approval-send-{CONFETTI}"));
+    drive(&mut rt, idle);
+
+    let (state, output, _) = confetti_result(&agent);
+    assert_eq!(state, ToolState::OutputAvailable);
+    assert_eq!(output, Some(json!({ "thrown": 3 })));
+}
+
+#[test]
+fn a_typed_result_that_is_not_json_goes_back_as_text() {
+    let agent = RecordingAgent::confetti();
+    let mut rt = chat_with(agent.clone(), Arc::new(NoClientTools));
+    rt.update(|s, _| s.send_prompt("Party"));
+    wait_for(&mut rt, &format!("approval-send-{CONFETTI}"));
+
+    rt.update(|s, _| s.manual_reply(CONFETTI).insert("it worked"));
+    tap(&mut rt, &format!("approval-send-{CONFETTI}"));
+    drive(&mut rt, idle);
+
+    assert_eq!(confetti_result(&agent).1, Some(json!("it worked")));
+}
+
+struct ScriptedRunner {
+    requests: Mutex<Vec<CommandRequest>>,
+}
+
+impl CommandRunner for ScriptedRunner {
+    fn run(&self, request: &CommandRequest) -> Result<CommandOutput, CommandError> {
+        self.requests.lock().unwrap().push(request.clone());
+        Ok(CommandOutput {
+            status: Some(0),
+            stdout: b"{\"thrown\": true}".to_vec(),
+            stderr: Vec::new(),
+        })
+    }
+}
+
+struct QuietShell;
+
+impl crate::menubar::AppShell for QuietShell {
+    fn open_window(&self) {}
+    fn set_dock_icon(&self, _: bool) {}
+    fn toggle_quick_ask(&self) {}
+    fn quit(&self) {}
+    fn open_url(&self, _: &str) {}
+    fn copy_text(&self, _: &str) {}
+}
+
+struct QuietNotifier;
+
+impl crate::notify::Notifier for QuietNotifier {
+    fn post(&self, _: &rune_notify::Notification) -> bool {
+        true
+    }
+    fn remove(&self, _: &[&str]) {}
+    fn focused(&self) -> bool {
+        false
+    }
+}
+
+#[test]
+fn a_command_bound_while_the_card_waits_is_used_when_run_is_pressed() {
+    let agent = RecordingAgent::confetti();
+    let bindings = Arc::new(CommandBindings::default());
+    let runner = Arc::new(ScriptedRunner {
+        requests: Mutex::new(Vec::new()),
+    });
+    let registry = Registry::new(
+        Builtins {
+            shell: Arc::new(QuietShell),
+            notifier: Arc::new(QuietNotifier),
+            selection: Arc::new(NoSelection),
+        },
+        bindings.clone(),
+        runner.clone(),
+    );
+    let mut rt = chat_with(agent.clone(), Arc::new(registry));
+    rt.update(|s, _| s.send_prompt("Party"));
+    wait_for(&mut rt, &format!("approval-field-{CONFETTI}"));
+
+    bindings
+        .bind(
+            "throw_confetti",
+            CommandBinding {
+                program: "/usr/local/bin/confetti".into(),
+                args: vec!["--count".into(), "two words".into()],
+                timeout_secs: 5,
+            },
+        )
+        .unwrap();
+    rt.update(|_, _| {});
+    wait_for(&mut rt, &run_key());
+    assert!(
+        rt.find(&format!("approval-field-{CONFETTI}")).is_none(),
+        "the field gives way to Run"
+    );
+    assert!(shows_text(
+        &rt,
+        "/usr/local/bin/confetti --count 'two words'",
+        "approval-command"
+    ));
+
+    tap(&mut rt, &run_key());
+    drive(&mut rt, idle);
+
+    let requests = runner.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].args, ["--count", "two words"]);
+    assert_eq!(requests[0].stdin, b"{\"count\":50}");
+    assert_eq!(confetti_result(&agent).1, Some(json!({ "thrown": true })));
+}
+
+#[test]
+fn a_new_approval_card_takes_focus_and_announces_itself() {
+    let agent = RecordingAgent::confetti();
+    let mut rt = chat_with(agent, Arc::new(FakeClientTools));
+    rt.update(|s, _| s.send_prompt("Party"));
+    wait_for(&mut rt, &run_key());
+    quiet_frames(&mut rt);
+
+    let key = run_key();
+    assert!(
+        rt.elements()
+            .iter()
+            .any(|e| e.key.as_deref() == Some(key.as_str()) && e.focused),
+        "Run has focus"
+    );
+    assert!(shows_text(
+        &rt,
+        "Waiting for your approval",
+        "approval-actions"
+    ));
+    let labels: Vec<String> = rt
+        .elements()
+        .iter()
+        .filter_map(|e| e.label.clone())
+        .collect();
+    for expected in ["Run throw_confetti", "Decline throw_confetti"] {
+        assert!(
+            labels.iter().any(|l| l == expected),
+            "{expected} in {labels:?}"
+        );
+    }
+    assert!(
+        labels
+            .iter()
+            .any(|l| l == "throw_confetti, waiting for your approval"),
+        "the card says what it waits for"
     );
 }

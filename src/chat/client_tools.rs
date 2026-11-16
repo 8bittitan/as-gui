@@ -1,27 +1,28 @@
-//! Client tool calls: the agent ends its turn on calls the app has to run, each runs on a
-//! worker thread, and when every call of the step has a result the turn continues in the same
-//! assistant message.
+//! Client tool calls: the agent ends its turn on calls the app has to run. Each waits for the
+//! user's Run or Decline, runs on a worker thread, and when every call of the step has a
+//! result the turn continues in the same assistant message.
 
+use std::collections::BTreeMap;
+
+use rune::{TextEdit, Tx};
 use serde_json::Value;
 
 use super::Chat;
-use crate::agent::{
-    CLIENT_TOOL_TIMEOUT, PendingCall, StreamEvent, non_empty_output, run_with_timeout,
-};
+use crate::agent::{PendingCall, StreamEvent, non_empty_output, run_with_timeout};
 
 /// How many rounds of client tools one user turn may run, so a loop can't run away.
 const MAX_ROUNDS: usize = 8;
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum CallState {
+pub(crate) enum CallState {
     Awaiting,
     Running,
     Resolved(Result<Value, String>),
     Declined,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct ClientCall {
+#[derive(Clone, Debug)]
+pub(crate) struct ClientCall {
     pub call_id: String,
     pub name: String,
     pub input: Value,
@@ -38,6 +39,10 @@ impl ClientCall {
 #[derive(Default)]
 pub(super) struct ClientRound {
     calls: Vec<ClientCall>,
+    /// The result field of each call, for the calls nothing handles.
+    replies: BTreeMap<String, TextEdit>,
+    /// Whether keyboard focus should move to the first call still waiting.
+    focus_wanted: bool,
     /// Rounds run since the user's last message.
     rounds: usize,
     /// Bumped whenever the turn is cancelled or replaced: a result tagged with an older
@@ -53,6 +58,32 @@ pub(super) struct ToolResult {
 }
 
 impl Chat {
+    pub(crate) fn client_call(&self, call_id: &str) -> Option<&ClientCall> {
+        self.client_round
+            .calls
+            .iter()
+            .find(|call| !call_id.is_empty() && call.call_id == call_id)
+    }
+
+    /// The calls waiting for the user, in order.
+    pub(crate) fn awaiting_calls(&self) -> impl Iterator<Item = &ClientCall> {
+        self.client_round
+            .calls
+            .iter()
+            .filter(|call| call.state == CallState::Awaiting)
+    }
+
+    pub(crate) fn client_reply(&self, call_id: &str) -> Option<&TextEdit> {
+        self.client_round.replies.get(call_id)
+    }
+
+    pub(crate) fn manual_reply(&mut self, call_id: &str) -> &mut TextEdit {
+        self.client_round
+            .replies
+            .entry(call_id.to_string())
+            .or_insert_with(|| TextEdit::new(""))
+    }
+
     pub(super) fn client_round_open(&self) -> bool {
         !self.client_round.calls.is_empty()
     }
@@ -85,6 +116,11 @@ impl Chat {
             return;
         }
         self.client_round.rounds += 1;
+        self.client_round.focus_wanted = true;
+        self.client_round.replies = calls
+            .iter()
+            .map(|call| (call.call_id.clone(), TextEdit::new("")))
+            .collect();
         self.client_round.calls = calls
             .into_iter()
             .map(|call| ClientCall {
@@ -94,16 +130,6 @@ impl Chat {
                 state: CallState::Awaiting,
             })
             .collect();
-        // Phase 2 asks the user here; until then every call runs.
-        let ids: Vec<String> = self
-            .client_round
-            .calls
-            .iter()
-            .map(|call| call.call_id.clone())
-            .collect();
-        for id in ids {
-            self.approve_client_call(&id);
-        }
     }
 
     fn stop_turn(&mut self, error: String) {
@@ -115,25 +141,30 @@ impl Chat {
         self.error = Some(error);
     }
 
-    /// Runs the call on a worker thread.
-    pub fn approve_client_call(&mut self, call_id: &str) {
-        let Some(call) = self
-            .client_round
+    fn awaiting_mut(&mut self, call_id: &str) -> Option<&mut ClientCall> {
+        self.client_round
             .calls
             .iter_mut()
             .find(|call| call.call_id == call_id && call.state == CallState::Awaiting)
-        else {
+    }
+
+    /// Runs the call on a worker thread. Whatever handles the tool is looked up now, not when
+    /// the call arrived, and its timeout starts here.
+    pub fn approve_client_call(&mut self, call_id: &str) {
+        let tools = std::sync::Arc::clone(&self.client_tools);
+        let Some(call) = self.awaiting_mut(call_id) else {
             return;
         };
         call.state = CallState::Running;
-        let tools = std::sync::Arc::clone(&self.client_tools);
         let (name, input) = (call.name.clone(), call.input.clone());
+        let timeout = tools.timeout(&name);
         let results = self.tool_tx.clone();
         let waker = self.waker.clone();
         let generation = self.client_round.generation;
         let call_id = call_id.to_string();
+        self.client_round.focus_wanted = true;
         std::thread::spawn(move || {
-            let result = run_with_timeout(tools, name, input, CLIENT_TOOL_TIMEOUT);
+            let result = run_with_timeout(tools, name, input, timeout);
             let _ = results.send(ToolResult {
                 generation,
                 call_id,
@@ -146,18 +177,13 @@ impl Chat {
     }
 
     /// Answers the agent that the user said no.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn decline_client_call(&mut self, call_id: &str) {
-        let Some(call) = self
-            .client_round
-            .calls
-            .iter_mut()
-            .find(|call| call.call_id == call_id && call.state == CallState::Awaiting)
-        else {
+        let Some(call) = self.awaiting_mut(call_id) else {
             return;
         };
         call.state = CallState::Declined;
         let name = call.name.clone();
+        self.client_round.focus_wanted = true;
         self.apply_at(
             StreamEvent::ToolFailed {
                 call_id: call_id.into(),
@@ -166,6 +192,27 @@ impl Chat {
             },
             self.now,
         );
+    }
+
+    /// Sends what the user typed as the call's result: JSON when it parses, otherwise text.
+    pub fn send_manual_result(&mut self, call_id: &str) {
+        let typed = self
+            .client_round
+            .replies
+            .get(call_id)
+            .map(|field| field.text.trim().to_string())
+            .unwrap_or_default();
+        let Some(call) = self.awaiting_mut(call_id) else {
+            return;
+        };
+        call.state = CallState::Running;
+        let result = if typed.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&typed).unwrap_or(Value::String(typed))
+        };
+        self.client_round.focus_wanted = true;
+        self.resolve_call(call_id, Ok(result));
     }
 
     fn resolve_call(&mut self, call_id: &str, result: Result<Value, String>) {
@@ -195,9 +242,9 @@ impl Chat {
         self.apply_at(ev, self.now);
     }
 
-    /// Applies the results the workers sent, and continues the turn once every call of the
-    /// step has one. True when state changed.
-    pub(super) fn drain_client_tools(&mut self) -> bool {
+    /// Applies the results the workers sent, moves focus to the call that waits next, and
+    /// continues the turn once every call of the step has a result. True when state changed.
+    pub(super) fn drain_client_tools(&mut self, tx: &mut Tx) -> bool {
         let mut changed = false;
         while let Ok(done) = self.tool_results.try_recv() {
             if done.generation != self.client_round.generation {
@@ -216,7 +263,14 @@ impl Chat {
             self.client_round_open() && self.client_round.calls.iter().all(ClientCall::settled);
         if ready {
             self.client_round.calls.clear();
+            self.client_round.replies.clear();
             self.continue_turn();
+            changed = true;
+        }
+        if std::mem::take(&mut self.client_round.focus_wanted)
+            && let Some(call) = self.awaiting_calls().next()
+        {
+            tx.focus(format!("approval-{}", call.call_id), true);
             changed = true;
         }
         changed
@@ -226,35 +280,7 @@ impl Chat {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{ToolState, mock_client, mock_directory};
-
-    #[test]
-    fn a_declined_call_answers_the_agent_with_an_error_and_lets_the_turn_continue() {
-        let mut chat = Chat::new(mock_client(), mock_directory());
-        let _sender = chat.begin_turn("Party");
-        chat.client_round.calls = vec![ClientCall {
-            call_id: "c1".into(),
-            name: "throw_confetti".into(),
-            input: Value::Null,
-            state: CallState::Awaiting,
-        }];
-
-        chat.decline_client_call("c1");
-
-        assert_eq!(chat.client_round.calls[0].state, CallState::Declined);
-        let reply = &chat.sessions[0].messages[1];
-        let crate::agent::Part::Tool(part) = &reply.parts[0] else {
-            panic!("the call has a part: {:?}", reply.parts);
-        };
-        assert_eq!(part.state, ToolState::OutputError);
-        assert!(
-            part.error
-                .as_deref()
-                .is_some_and(|e| e.contains("declined"))
-        );
-        assert!(chat.drain_client_tools(), "every call has its answer");
-        assert!(chat.client_round.calls.is_empty());
-    }
+    use crate::agent::{mock_client, mock_directory};
 
     #[test]
     fn a_result_for_a_call_nobody_is_running_is_ignored() {
