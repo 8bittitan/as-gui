@@ -663,6 +663,19 @@ fn approval(s: &Chat, k: &rune_kit::Kit, call: &ClientCall) -> El {
                 .key(format!("approval-run-{id}")),
         );
     }
+    if handler == Handler::Ask {
+        actions = actions.child(
+            satellite::button("Set up a handler…")
+                .variant(ButtonVariant::Ghost)
+                .on_press({
+                    let name = name.clone();
+                    move |s: &mut Chat| s.open_agent_panel(Some(name.clone()))
+                })
+                .sized(k, satellite::Size::Small)
+                .label(format!("Set up a handler for {name}"))
+                .key(format!("approval-setup-{id}")),
+        );
+    }
     actions = actions.child(
         satellite::button("Decline")
             .variant(ButtonVariant::Outline)
@@ -733,7 +746,7 @@ fn running_row(k: &rune_kit::Kit, id: &str) -> El {
 }
 
 /// A command as it will run, each argument quoted when it holds anything a shell would split.
-fn display_command(program: &str, args: &[String]) -> String {
+pub(crate) fn display_command(program: &str, args: &[String]) -> String {
     let quote = |part: &str| {
         if !part.is_empty()
             && part

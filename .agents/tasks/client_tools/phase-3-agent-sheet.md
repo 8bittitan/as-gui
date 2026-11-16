@@ -1,6 +1,6 @@
 # Phase 3: Agent sheet
 
-**Status:** todo (needs Phase 2)
+**Status:** done
 **Goal:** per-agent settings, starting with which handler each client tool uses. The settings dialog is app-wide, so the agent gets its own panel: a modal sheet pinned to the right edge of the window.
 
 ## Why a separate panel
@@ -63,10 +63,10 @@ Details:
 
 ## Done when
 
-- [ ] `AgentDirectory::agent` with the mock and demo versions
-- [ ] `SavedAgent` and `ToolBinding` in the state file, with round-trip tests
-- [ ] `src/chat/agent_panel.rs` and `src/agent_panel.rs`
-- [ ] Four entry points
-- [ ] Focus and keyboard behavior checked against `better-accessibility`
-- [ ] `ARCHITECTURE.md` updated
-- [ ] `just check`, default-feature clippy and tests pass
+- [x] `AgentDirectory::agent` with the mock and demo versions
+- [x] `SavedAgent` and `ToolBinding` in the state file, with round-trip tests
+- [x] `src/chat/agent_panel.rs` and `src/agent_panel.rs`
+- [x] Four entry points
+- [x] Focus and keyboard behavior checked against `better-accessibility`
+- [x] `ARCHITECTURE.md` updated
+- [x] `just check`, default-feature clippy and tests pass

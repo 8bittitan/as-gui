@@ -355,6 +355,14 @@ pub enum StreamEvent {
         session_id: String,
         error: String,
     },
+    AgentConfigLoaded {
+        agent_id: String,
+        config: AgentConfig,
+    },
+    AgentConfigFailed {
+        agent_id: String,
+        error: String,
+    },
     /// The id the server persists this turn under, from the response's `X-Conversation-Id`
     /// header: a new conversation's id, or the one the request continued.
     ConversationStarted(String),
@@ -394,6 +402,27 @@ pub struct AgentInfo {
     pub description: Option<String>,
     pub status: AgentStatus,
     pub model: Option<String>,
+}
+
+/// A tool the app runs for the agent, as the agent declares it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClientToolDecl {
+    pub name: String,
+    pub description: Option<String>,
+    pub input_schema: Option<serde_json::Value>,
+    pub is_terminal: bool,
+}
+
+/// One agent's configuration (`GET /agents/{id}`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentConfig {
+    pub name: String,
+    pub description: Option<String>,
+    pub status: AgentStatus,
+    pub model: Option<String>,
+    pub client_tools: Vec<ClientToolDecl>,
+    /// The names of the tools the server runs.
+    pub other_tools: Vec<String>,
 }
 
 /// One conversation of an agent's history (`ConversationBaseResponse`).

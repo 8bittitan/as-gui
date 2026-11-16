@@ -4,6 +4,7 @@
 //! `conversation`; responses stream in from `agent::AgentClient` over channels that [`poll`]
 //! drains each frame.
 
+pub(crate) mod agent_panel;
 mod appearance;
 mod applications;
 mod client_tools;
@@ -89,6 +90,15 @@ pub struct Chat {
     pub index_search: Arc<dyn IndexSearch>,
     /// What runs the tools the agent asks the app to run; tests inject a fake.
     pub client_tools: Arc<dyn ClientTools>,
+    /// The commands the selected agent's tools are bound to, kept in step with the saved
+    /// settings; the registry reads them.
+    pub bindings: Arc<crate::agent::CommandBindings>,
+    /// The agent sheet, when open.
+    pub agent_panel: Option<agent_panel::AgentPanel>,
+    pub agent_config: agent_panel::AgentConfigState,
+    pub binding_draft: agent_panel::BindingDraft,
+    /// Agent settings while no application is active (the mock), kept for the session only.
+    session_agents: BTreeMap<String, crate::store::SavedAgent>,
     client_round: client_tools::ClientRound,
     tool_results: Receiver<client_tools::ToolResult>,
     tool_tx: Sender<client_tools::ToolResult>,
@@ -185,6 +195,11 @@ impl Chat {
             search: SearchPanel::default(),
             index_search: Arc::new(crate::agent::AutoSearch),
             client_tools: Arc::new(crate::agent::NoClientTools),
+            bindings: Arc::default(),
+            agent_panel: None,
+            agent_config: Default::default(),
+            binding_draft: Default::default(),
+            session_agents: BTreeMap::new(),
             client_round: Default::default(),
             tool_results,
             tool_tx,
@@ -237,6 +252,7 @@ impl Chat {
     pub fn has_modal_open(&self) -> bool {
         self.reader.is_some()
             || self.settings_open
+            || self.agent_panel.is_some()
             || self.command_bar.open
             || self.add_form.open
             || self.application_menu_open
@@ -291,6 +307,9 @@ impl Chat {
             StreamEvent::ClientToolsPending(_) | StreamEvent::ClientToolResolved { .. } => {
                 self.apply_client_tools(ev)
             }
+            StreamEvent::AgentConfigLoaded { .. } | StreamEvent::AgentConfigFailed { .. } => {
+                self.apply_agent_config(ev)
+            }
             StreamEvent::SearchLoaded { .. } | StreamEvent::SearchFailed { .. } => {
                 self.apply_search(ev)
             }
@@ -324,5 +343,6 @@ pub fn poll(s: &mut Chat, t: f64, tx: &mut Tx) -> bool {
     changed |= s.track_views(t, tx);
     changed |= s.drain_turn(t);
     changed |= s.drain_client_tools(tx);
+    changed |= s.focus_agent_panel(tx);
     changed
 }

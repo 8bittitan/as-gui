@@ -11,6 +11,7 @@ use super::*;
 pub trait AgentDirectory: Send + Sync {
     fn list(&self) -> Result<Vec<AgentInfo>, String>;
     fn sessions(&self, agent_id: &str) -> Result<Vec<SessionInfo>, String>;
+    fn agent(&self, agent_id: &str) -> Result<AgentConfig, String>;
     fn conversation(
         &self,
         agent_id: &str,
@@ -321,6 +322,10 @@ impl AgentDirectory for AlgoliaClient {
             },
             parse_conversations_page,
         )
+    }
+
+    fn agent(&self, agent_id: &str) -> Result<AgentConfig, String> {
+        parse_agent_config(&self.get(&format!("agents/{}", path_segment(agent_id)))?)
     }
 
     fn conversation(

@@ -76,6 +76,57 @@ pub fn parse_conversations_page(json: &str) -> Result<(Vec<SessionInfo>, usize),
     Ok((sessions, total_pages.saturating_sub(page)))
 }
 
+/// One agent (`GET /agent-studio/1/agents/{agentId}`). Tools with a `type` other than a
+/// client tool read as names the server runs, so an unknown kind is never an error.
+pub fn parse_agent_config(json: &str) -> Result<AgentConfig, String> {
+    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("bad agent: {e}"))?;
+    let text = |field: &str| v.get(field).and_then(|t| t.as_str()).map(String::from);
+    let status = match text("status").as_deref() {
+        Some("published") => AgentStatus::Published,
+        Some("draft") => AgentStatus::Draft,
+        other => return Err(format!("unknown agent status {other:?}")),
+    };
+    let mut client_tools = Vec::new();
+    let mut other_tools = Vec::new();
+    let tools = v
+        .get("config")
+        .and_then(|c| c.get("tools"))
+        .or_else(|| v.get("tools"))
+        .and_then(|t| t.as_array());
+    for tool in tools.into_iter().flatten() {
+        let field = |name: &str| tool.get(name).and_then(|t| t.as_str()).map(String::from);
+        match tool.get("type").and_then(|t| t.as_str()) {
+            Some("client_side") => {
+                let Some(name) = field("name").filter(|n| !n.is_empty()) else {
+                    continue;
+                };
+                client_tools.push(ClientToolDecl {
+                    name,
+                    description: field("description"),
+                    input_schema: tool.get("inputSchema").filter(|s| !s.is_null()).cloned(),
+                    is_terminal: tool
+                        .get("isTerminal")
+                        .and_then(|t| t.as_bool())
+                        .unwrap_or(false),
+                });
+            }
+            other => {
+                if let Some(name) = field("name").or_else(|| other.map(String::from)) {
+                    other_tools.push(name);
+                }
+            }
+        }
+    }
+    Ok(AgentConfig {
+        name: text("name").ok_or("agent has no name")?,
+        description: text("description"),
+        status,
+        model: text("model"),
+        client_tools,
+        other_tools,
+    })
+}
+
 /// One conversation's messages (`ConversationFullResponse`): text parts join into the
 /// message's text, tool calls become the UI's tool group, and a tool result fills the call
 /// it answers. Parts the UI doesn't show (reasoning, lifecycle steps) are skipped.
@@ -218,6 +269,59 @@ pub fn parse_conversation(json: &str) -> Result<Vec<ChatMessage>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const AGENT: &str = r#"{
+        "id": "a1", "name": "Shop", "description": "Sells things", "status": "published",
+        "model": "gpt-5", "instructions": "Be kind",
+        "config": { "tools": [
+            { "type": "client_side", "name": "export_report", "description": "Exports",
+              "inputSchema": { "type": "object", "properties": { "id": { "type": "string" } } },
+              "isTerminal": true },
+            { "type": "algolia_search_index", "name": "products" },
+            { "type": "mcp", "name": "docs" },
+            { "type": "future_kind" }
+        ] }
+    }"#;
+
+    #[test]
+    fn an_agent_config_lists_client_tools_and_the_others_by_name() {
+        let config = parse_agent_config(AGENT).unwrap();
+        assert_eq!(config.name, "Shop");
+        assert_eq!(config.status, AgentStatus::Published);
+        assert_eq!(config.model.as_deref(), Some("gpt-5"));
+        assert_eq!(config.client_tools.len(), 1);
+        let tool = &config.client_tools[0];
+        assert_eq!(tool.name, "export_report");
+        assert_eq!(tool.description.as_deref(), Some("Exports"));
+        assert!(tool.is_terminal);
+        assert_eq!(tool.input_schema.as_ref().unwrap()["type"], "object");
+        assert_eq!(config.other_tools, ["products", "docs", "future_kind"]);
+    }
+
+    #[test]
+    fn an_agent_config_with_missing_optional_fields_still_parses() {
+        let config = parse_agent_config(r#"{ "name": "Bare", "status": "draft" }"#).unwrap();
+        assert_eq!(config.status, AgentStatus::Draft);
+        assert_eq!(config.description, None);
+        assert_eq!(config.model, None);
+        assert!(config.client_tools.is_empty() && config.other_tools.is_empty());
+    }
+
+    #[test]
+    fn an_agent_config_without_a_name_is_an_error() {
+        assert!(parse_agent_config(r#"{ "status": "draft" }"#).is_err());
+    }
+
+    #[test]
+    fn a_client_tool_without_a_schema_or_terminal_flag_takes_the_defaults() {
+        let config = parse_agent_config(
+            r#"{ "name": "A", "status": "published",
+                 "config": { "tools": [ { "type": "client_side", "name": "ping" } ] } }"#,
+        )
+        .unwrap();
+        assert_eq!(config.client_tools[0].input_schema, None);
+        assert!(!config.client_tools[0].is_terminal);
+    }
 
     #[test]
     fn a_conversations_page_parses_ids_titles_and_pages_left() {

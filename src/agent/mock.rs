@@ -20,6 +20,30 @@ impl AgentDirectory for MockDirectory {
         Ok(self.sessions.clone())
     }
 
+    fn agent(&self, agent_id: &str) -> Result<AgentConfig, String> {
+        let info = self
+            .agents
+            .iter()
+            .find(|a| a.agent_id == agent_id)
+            .ok_or_else(|| format!("no agent {agent_id}"))?;
+        Ok(AgentConfig {
+            name: info.name.clone(),
+            description: info.description.clone(),
+            status: info.status.clone(),
+            model: info.model.clone(),
+            client_tools: vec![ClientToolDecl {
+                name: "throw_confetti".into(),
+                description: Some("Throws confetti over the window".into()),
+                input_schema: Some(json!({
+                    "type": "object",
+                    "properties": { "count": { "type": "integer" } }
+                })),
+                is_terminal: false,
+            }],
+            other_tools: vec!["load_skill_tool".into(), "schedule_task_tool".into()],
+        })
+    }
+
     fn conversation(
         &self,
         _agent_id: &str,

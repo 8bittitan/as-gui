@@ -9,6 +9,7 @@
 //! `logs/as-gui.log.YYYY-MM-DD`; default `warn`). Headless: `cargo run -- --tree tree.json`.
 
 mod agent;
+mod agent_panel;
 #[cfg(feature = "bench")]
 pub mod bench;
 mod brand;
@@ -252,7 +253,7 @@ pub fn run() {
                     notifier: chat.notifier.clone(),
                     selection: chat.selection.clone(),
                 },
-                Arc::new(agent::CommandBindings::default()),
+                chat.bindings.clone(),
                 Arc::new(agent::SystemRunner),
             ));
             if launch.status_item {

@@ -52,6 +52,7 @@ pub fn on_key(s: &mut Chat, ev: &KeyEvent, tx: &mut Tx) -> bool {
         Some(Action::ToggleSidebar) => s.sidebar.toggle(),
         Some(Action::CommandBar) => crate::command_bar::toggled(s, tx),
         Some(Action::Settings) => s.settings_open = !s.settings_open,
+        Some(Action::AgentSettings) => s.toggle_agent_panel(),
         Some(Action::NewSession) => s.new_session(),
         // The global shortcuts handle these, whichever app is in front.
         Some(Action::QuickAsk | Action::AskSelection) | None => return false,
@@ -156,10 +157,24 @@ pub fn view(s: &Chat, cx: &mut Cx<Chat>) -> El {
         }
         toolbar = toolbar.center(title);
     }
+    let agent_settings_hint = hinted("Agent settings", &s.keymap.hint(Action::AgentSettings));
+    let agent_settings = (!picking && s.selected_agent.is_some()).then(|| {
+        IconButton::new(&icons::WRENCH)
+            .variant(IconButtonVariant::Ghost)
+            .label("Agent settings")
+            .on_press(|s: &mut Chat| s.open_agent_panel(None))
+            .sized(k, satellite::Size::Small)
+            .help(agent_settings_hint)
+            .key("agent-settings")
+    });
     let mut trailing = row().gap(12.0).center_y();
     let mut has_trailing = false;
     if s.pending {
         trailing = trailing.child(Spinner::new().build(k));
+        has_trailing = true;
+    }
+    if let Some(button) = agent_settings {
+        trailing = trailing.child(button);
         has_trailing = true;
     }
     if let Some(current) = s.active_option() {
@@ -212,6 +227,7 @@ pub fn view(s: &Chat, cx: &mut Cx<Chat>) -> El {
     reader_dialog(s, k, &mut layer);
     crate::command_bar::overlay(s, k, &mut layer);
     settings_dialog(s, k, &mut layer, &mut portal);
+    crate::agent_panel::sheet(s, k, &mut layer, &mut portal);
     // The select's listbox follows the dialog in node order, so it anchors to the trigger
     // inside the panel and draws above it.
     layer.extend(portal);
@@ -509,7 +525,7 @@ fn modal_entrance(k: &rune_kit::Kit) -> Transition {
 
 /// A Satellite modal header: the title on the leading edge, optional controls trailing, over
 /// a hairline.
-fn modal_header(k: &rune_kit::Kit, key: &str, title: El, px: f32) -> El {
+pub(crate) fn modal_header(k: &rune_kit::Kit, key: &str, title: El, px: f32) -> El {
     row()
         .key(key.to_string())
         .w_full()
@@ -522,7 +538,7 @@ fn modal_header(k: &rune_kit::Kit, key: &str, title: El, px: f32) -> El {
         .child(title.grow(1.0).min_w(0.0))
 }
 
-fn push_scrim(k: &rune_kit::Kit, layer: &mut Vec<El>, key: &str) {
+pub(crate) fn push_scrim(k: &rune_kit::Kit, layer: &mut Vec<El>, key: &str) {
     layer.push(
         el().key(format!("{key}-scrim"))
             .absolute(0.0, 0.0)
@@ -591,7 +607,7 @@ pub(crate) fn field_box(k: &rune_kit::Kit, input: El) -> El {
     field.child(input)
 }
 
-fn dialog_title(k: &rune_kit::Kit, title: &str) -> El {
+pub(crate) fn dialog_title(k: &rune_kit::Kit, title: &str) -> El {
     text(title).font(HEADING).color(k.c.text_base).truncate()
 }
 
@@ -924,7 +940,7 @@ fn keybind_control(s: &Chat, k: &rune_kit::Kit, action: Action) -> El {
 }
 
 /// A settings section: its name over a card of rows, as macOS System Settings groups them.
-fn section(k: &rune_kit::Kit, name: &str, card: El) -> El {
+pub(crate) fn section(k: &rune_kit::Kit, name: &str, card: El) -> El {
     col()
         .key(format!("section-{name}"))
         .w_full()
@@ -938,7 +954,7 @@ fn section(k: &rune_kit::Kit, name: &str, card: El) -> El {
         .child(card)
 }
 
-fn card(k: &rune_kit::Kit) -> El {
+pub(crate) fn card(k: &rune_kit::Kit) -> El {
     let mut card = col()
         .key("card")
         .w_full()
@@ -965,7 +981,7 @@ fn settings_row(k: &rune_kit::Kit, label: &str, control: El) -> El {
         .child(control)
 }
 
-fn row_separator(k: &rune_kit::Kit) -> El {
+pub(crate) fn row_separator(k: &rune_kit::Kit) -> El {
     col()
         .px(16.0)
         .child(el().w_full().h(1.0).fill(k.c.border_muted))

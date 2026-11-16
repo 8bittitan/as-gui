@@ -20,6 +20,7 @@ use crate::shell::{on_key, view};
 use crate::store::Persisted;
 
 mod accessibility;
+mod agent_panel;
 mod applications;
 mod ask_selection;
 mod buttons;

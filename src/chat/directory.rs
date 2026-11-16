@@ -83,6 +83,7 @@ impl Chat {
         self.current = 0;
         self.error = None;
         self.generation += 1;
+        self.forget_agent_config();
         self.pending_conversation = None;
         self.sessions_load = Load::Idle;
         self.show_all_sessions = false;

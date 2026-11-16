@@ -57,6 +57,14 @@ impl CommandBindings {
         Ok(())
     }
 
+    /// Makes `commands` the whole table; names a built-in owns are left out.
+    pub fn replace(&self, commands: impl IntoIterator<Item = (String, CommandBinding)>) {
+        *self.0.lock().unwrap() = commands
+            .into_iter()
+            .filter(|(name, binding)| !is_builtin(name) && !binding.program.trim().is_empty())
+            .collect();
+    }
+
     pub fn get(&self, name: &str) -> Option<CommandBinding> {
         self.0.lock().unwrap().get(name).cloned()
     }
@@ -267,6 +275,25 @@ mod tests {
             args: args.iter().map(|a| a.to_string()).collect(),
             timeout_secs: 7,
         }
+    }
+
+    #[test]
+    fn replacing_the_table_swaps_every_binding_and_skips_built_ins() {
+        let bindings = CommandBindings::default();
+        let binding = |program: &str| CommandBinding {
+            program: program.into(),
+            ..CommandBinding::default()
+        };
+        bindings.bind("old_tool", binding("/bin/old")).unwrap();
+        bindings.replace([
+            ("new_tool".to_string(), binding("/bin/new")),
+            ("open_url".to_string(), binding("/bin/evil")),
+            ("blank".to_string(), binding("  ")),
+        ]);
+        assert_eq!(bindings.get("old_tool"), None);
+        assert_eq!(bindings.get("new_tool").unwrap().program, "/bin/new");
+        assert_eq!(bindings.get("open_url"), None);
+        assert_eq!(bindings.get("blank"), None);
     }
 
     #[test]

@@ -710,3 +710,95 @@ fn a_new_approval_card_takes_focus_and_announces_itself() {
         "the card says what it waits for"
     );
 }
+
+fn with_directory(rt: &mut Runtime<Chat>) {
+    rt.update(|s, _| {
+        s.directory = Arc::new(MockDirectory {
+            agents: vec![agent_one()],
+            sessions: Vec::new(),
+            conversation: Vec::new(),
+        });
+        s.mock_forced = false;
+        s.agents = vec![agent_one()];
+    });
+}
+
+fn focused(rt: &Runtime<Chat>, key: &str) -> bool {
+    rt.elements()
+        .iter()
+        .any(|e| e.key.as_deref() == Some(key) && e.focused)
+}
+
+#[test]
+fn set_up_a_handler_opens_the_sheet_on_that_tool_and_focus_returns_to_the_card() {
+    let agent = RecordingAgent::confetti();
+    let mut rt = chat_with(agent, Arc::new(NoClientTools));
+    with_directory(&mut rt);
+    rt.update(|s, _| s.send_prompt("Party"));
+    let link = format!("approval-setup-{CONFETTI}");
+    wait_for(&mut rt, &link);
+    quiet_frames(&mut rt);
+
+    tap(&mut rt, &link);
+    wait_for(&mut rt, "agent-tool-throw_confetti");
+    quiet_frames(&mut rt);
+    assert!(rt.find("agent-panel").is_some());
+    assert!(
+        rt.elements()
+            .iter()
+            .any(|e| e.focused && e.path.contains("agent-tool-handler-throw_confetti")),
+        "the tool's handler select has focus"
+    );
+
+    rt.key(KeyEvent {
+        key: Key::Escape,
+        mods: Mods::default(),
+    });
+    quiet_frames(&mut rt);
+    assert!(rt.find("agent-panel").is_none());
+    assert!(focused(&rt, &link), "focus is back on the link");
+}
+
+#[test]
+fn a_command_saved_in_the_sheet_runs_when_run_is_pressed() {
+    let agent = RecordingAgent::confetti();
+    let mut rt = chat_with(agent.clone(), Arc::new(NoClientTools));
+    with_directory(&mut rt);
+    let runner = Arc::new(ScriptedRunner {
+        requests: Mutex::new(Vec::new()),
+    });
+    let registry = Registry::new(
+        Builtins {
+            shell: Arc::new(QuietShell),
+            notifier: Arc::new(QuietNotifier),
+            selection: Arc::new(NoSelection),
+        },
+        rt.state.bindings.clone(),
+        runner.clone(),
+    );
+    rt.update(move |s, _| s.client_tools = Arc::new(registry));
+
+    rt.update(|s, _| {
+        s.open_agent_panel(None);
+        s.edit_binding("throw_confetti");
+        s.binding_draft.program.insert("/usr/local/bin/confetti");
+        s.binding_draft.args.insert("--loud");
+        s.save_binding_edit();
+        s.close_agent_panel();
+    });
+    rt.update(|s, _| s.send_prompt("Party"));
+    wait_for(&mut rt, &run_key());
+    assert!(shows_text(
+        &rt,
+        "/usr/local/bin/confetti --loud",
+        "approval-command"
+    ));
+
+    tap(&mut rt, &run_key());
+    drive(&mut rt, idle);
+
+    let requests = runner.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].program, "/usr/local/bin/confetti");
+    assert_eq!(requests[0].args, ["--loud"]);
+}

@@ -117,6 +117,11 @@ impl AgentDirectory for Held {
         self.inner.sessions(agent_id)
     }
 
+    fn agent(&self, agent_id: &str) -> Result<crate::agent::AgentConfig, String> {
+        self.wait();
+        self.inner.agent(agent_id)
+    }
+
     fn conversation(&self, agent_id: &str, id: &str) -> Result<Vec<ChatMessage>, String> {
         self.wait();
         self.inner.conversation(agent_id, id)

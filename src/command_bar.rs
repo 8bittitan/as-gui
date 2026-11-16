@@ -41,6 +41,7 @@ pub enum Command {
     NewSession,
     ToggleSidebar,
     Settings,
+    AgentSettings,
     AddApplication,
     Theme(ThemePref),
     Accent(Accent),
@@ -198,6 +199,16 @@ fn action_entries(s: &Chat) -> Vec<Entry> {
         action("Settings", Command::Settings, Some(Action::Settings)),
         action("Add application", Command::AddApplication, None),
     ];
+    if s.selected_agent.is_some() {
+        found.insert(
+            3,
+            action(
+                "Agent settings",
+                Command::AgentSettings,
+                Some(Action::AgentSettings),
+            ),
+        );
+    }
     for (label, theme) in
         ThemePref::LABELS
             .iter()
@@ -340,6 +351,7 @@ impl Chat {
             Command::NewSession => self.new_session(),
             Command::ToggleSidebar => self.sidebar.toggle(),
             Command::Settings => self.settings_open = true,
+            Command::AgentSettings => self.open_agent_panel(None),
             Command::AddApplication => {
                 self.add_form.error = None;
                 self.add_form.open = true;
@@ -812,6 +824,17 @@ mod tests {
                 "Chat width: Wide",
             ]
         );
+    }
+
+    #[test]
+    fn agent_settings_is_offered_once_an_agent_is_open() {
+        let mut s = chat();
+        assert!(!titles(&entries(&s, "")).contains(&"Agent settings"));
+        s.selected_agent = Some(agent("a1", "One", AgentStatus::Published));
+        let found = entries(&s, "Agent settings");
+        assert_eq!(titles(&found), ["Agent settings"]);
+        assert_eq!(found[0].group, Group::Actions);
+        assert_eq!(found[0].hint, s.keymap.hint(Action::AgentSettings));
     }
 
     #[test]
