@@ -802,3 +802,191 @@ fn a_command_saved_in_the_sheet_runs_when_run_is_pressed() {
     assert_eq!(requests[0].program, "/usr/local/bin/confetti");
     assert_eq!(requests[0].args, ["--loud"]);
 }
+
+fn quick_ask_with_agent(agent: Arc<RecordingAgent>) -> Runtime<QuickAsk> {
+    let snapshot = Arc::new(Mutex::new(crate::agent::AgentSnapshot {
+        agent_id: "a1".into(),
+        agent_name: "One".into(),
+        client: agent,
+        ..crate::agent::AgentSnapshot::default()
+    }));
+    let mut rt = Runtime::new(
+        QuickAsk::new(snapshot, None, None),
+        quick_ask::view,
+        (480.0, 600.0),
+        Env {
+            system_dark: true,
+            scale: 2.0,
+        },
+    );
+    rt.poll = Some(quick_ask::poll);
+    rt.frame(0.0);
+    rt
+}
+
+#[test]
+fn a_quick_ask_turn_ending_on_a_client_call_offers_the_main_window_and_runs_nothing() {
+    let agent = RecordingAgent::confetti();
+    let mut rt = quick_ask_with_agent(agent.clone());
+    rt.update(|s, _| {
+        s.composer.insert("Party");
+        s.submit();
+    });
+    wait_for_qa(&mut rt, "qa-continue");
+    quiet_qa_frames(&mut rt);
+
+    assert!(!rt.state.pending);
+    assert_eq!(rt.state.pending_calls.len(), 1);
+    assert_eq!(agent.requests().len(), 1, "the tool was never answered");
+    assert!(
+        rt.elements()
+            .iter()
+            .any(|e| e.text.as_deref() == Some("Continue in the main window")),
+        "the card says what to do"
+    );
+}
+
+#[test]
+fn a_quick_ask_turn_with_a_pending_call_continues_in_the_main_window() {
+    let agent = RecordingAgent::confetti();
+    let mut qa = quick_ask_with_agent(agent.clone());
+    qa.update(|s, _| {
+        s.composer.insert("Party");
+        s.submit();
+    });
+    wait_for_qa(&mut qa, "qa-continue");
+    let events = qa.state.replay.clone();
+
+    let mut rt = chat_with(agent.clone(), Arc::new(FakeClientTools));
+    rt.update(move |s, _| s.receive_quick_ask_turn("Party".into(), None, events));
+    wait_for(&mut rt, &run_key());
+    assert!(rt.state.pending, "the turn waits for the user");
+    assert_eq!(agent.requests().len(), 1);
+
+    tap(&mut rt, &run_key());
+    drive(&mut rt, idle);
+    assert_eq!(agent.requests().len(), 2);
+    assert_eq!(confetti_result(&agent).0, ToolState::OutputAvailable);
+}
+
+fn wait_for_qa(rt: &mut Runtime<QuickAsk>, key: &str) {
+    for _ in 0..1000 {
+        rt.frame(1.0 / 60.0);
+        if rt.find(key).is_some() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    panic!("{key} never showed");
+}
+
+fn quiet_qa_frames(rt: &mut Runtime<QuickAsk>) {
+    for _ in 0..30 {
+        rt.frame(1.0 / 60.0);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+fn status(rt: &Runtime<Chat>) -> Option<String> {
+    rt.elements()
+        .iter()
+        .find(|e| e.key.as_deref() == Some("tool-status-throw_confetti"))
+        .and_then(|e| e.text.clone())
+}
+
+#[test]
+fn the_card_says_waiting_running_and_done_in_words() {
+    let agent = RecordingAgent::confetti();
+    let (tools, release) = GatedTools::new();
+    let mut rt = chat_with(agent, tools.clone());
+    rt.update(|s, _| s.send_prompt("Party"));
+    wait_for(&mut rt, &run_key());
+    assert_eq!(status(&rt).as_deref(), Some("Waiting for you"));
+    assert!(shows_text(
+        &rt,
+        "Run throw_confetti?",
+        "tool-throw_confetti"
+    ));
+
+    tap(&mut rt, &run_key());
+    for _ in 0..200 {
+        rt.frame(1.0 / 60.0);
+        if tools.started.load(Ordering::SeqCst) == 1 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    rt.frame(0.0);
+    assert_eq!(status(&rt).as_deref(), Some("Running on this Mac"));
+
+    release.send(()).unwrap();
+    drive(&mut rt, idle);
+    assert_eq!(status(&rt).as_deref(), Some("Done"));
+    assert!(shows_text(&rt, "On this Mac", "tool-throw_confetti"));
+}
+
+#[test]
+fn a_declined_call_says_declined_and_shows_why_without_opening() {
+    let mut rt = chat_with(RecordingAgent::confetti(), Arc::new(FakeClientTools));
+    rt.update(|s, _| s.send_prompt("Party"));
+    wait_for(&mut rt, &run_key());
+    tap(&mut rt, &format!("approval-decline-{CONFETTI}"));
+    drive(&mut rt, idle);
+    assert_eq!(status(&rt).as_deref(), Some("Declined"));
+    assert!(shows_text(
+        &rt,
+        "The user declined to run this tool.",
+        "tool-error"
+    ));
+}
+
+#[test]
+fn a_failed_call_says_failed_and_shows_its_error_without_opening() {
+    let mut rt = chat_with(RecordingAgent::confetti(), Arc::new(FailingTools));
+    rt.update(|s, _| s.send_prompt("Party"));
+    wait_for(&mut rt, &run_key());
+    tap(&mut rt, &run_key());
+    drive(&mut rt, idle);
+    assert_eq!(status(&rt).as_deref(), Some("Failed"));
+    assert!(shows_text(&rt, "throw_confetti broke", "tool-error"));
+}
+
+#[test]
+fn a_server_tool_card_carries_no_client_status() {
+    let mut rt = test_chat();
+    rt.update(|s, _| {
+        s.sessions[0].messages = vec![{
+            let mut m = ChatMessage::assistant("a1");
+            m.streaming = false;
+            m.text = "Done".into();
+            m.tools = mock_tools();
+            m
+        }];
+    });
+    rt.frame(0.0);
+    assert!(
+        rt.elements()
+            .iter()
+            .all(|e| !e.key.as_deref().unwrap_or("").starts_with("tool-status-"))
+    );
+}
+
+#[test]
+fn the_turns_trace_marks_when_the_call_waited_and_when_it_ran() {
+    let mut rt = chat_with(RecordingAgent::confetti(), Arc::new(FakeClientTools));
+    rt.update(|s, _| s.send_prompt("Party"));
+    wait_for(&mut rt, &run_key());
+    quiet_frames(&mut rt);
+    tap(&mut rt, &run_key());
+    drive(&mut rt, idle);
+    let trace = rt.state.sessions[0]
+        .messages
+        .last()
+        .and_then(|m| m.trace.clone())
+        .unwrap();
+    assert_eq!(trace.spans.len(), 1, "one trace across the continuation");
+    let timing = trace.spans[0].client.expect("marked as a client call");
+    let run = timing.run_start.expect("Run was pressed");
+    assert!(run >= timing.pending_at);
+    assert!(trace.spans[0].end.unwrap() >= run);
+}

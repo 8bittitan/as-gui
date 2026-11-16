@@ -90,6 +90,9 @@ pub struct Chat {
     pub index_search: Arc<dyn IndexSearch>,
     /// What runs the tools the agent asks the app to run; tests inject a fake.
     pub client_tools: Arc<dyn ClientTools>,
+    /// Where each client call of this run stands, kept after its round ends so the cards
+    /// keep saying what happened.
+    client_states: BTreeMap<String, client_tools::CallState>,
     /// The commands the selected agent's tools are bound to, kept in step with the saved
     /// settings; the registry reads them.
     pub bindings: Arc<crate::agent::CommandBindings>,
@@ -195,6 +198,7 @@ impl Chat {
             search: SearchPanel::default(),
             index_search: Arc::new(crate::agent::AutoSearch),
             client_tools: Arc::new(crate::agent::NoClientTools),
+            client_states: BTreeMap::new(),
             bindings: Arc::default(),
             agent_panel: None,
             agent_config: Default::default(),
@@ -304,9 +308,9 @@ impl Chat {
             | StreamEvent::ToolFinished { .. }
             | StreamEvent::Finished
             | StreamEvent::Failed(_) => self.apply_turn(ev),
-            StreamEvent::ClientToolsPending(_) | StreamEvent::ClientToolResolved { .. } => {
-                self.apply_client_tools(ev)
-            }
+            StreamEvent::ClientToolsPending(_)
+            | StreamEvent::ClientToolRunning { .. }
+            | StreamEvent::ClientToolResolved { .. } => self.apply_client_tools(ev),
             StreamEvent::AgentConfigLoaded { .. } | StreamEvent::AgentConfigFailed { .. } => {
                 self.apply_agent_config(ev)
             }

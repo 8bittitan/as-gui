@@ -87,7 +87,6 @@ pub fn mock_tools() -> Vec<ToolCall> {
 pub enum MockScript {
     /// Ends the first request on a pending `throw_confetti` client call, and answers the
     /// request that carries its result with text.
-    #[cfg_attr(not(test), allow(dead_code))]
     Confetti,
 }
 
@@ -242,10 +241,19 @@ pub fn mock_directory() -> Arc<dyn AgentDirectory> {
     })
 }
 
-/// The mock client: the demo's by `AS_GUI_DEMO=1`, otherwise the plain canned one.
+/// The mock client: the demo's by `AS_GUI_DEMO=1`, the client-tool script's by
+/// `AS_GUI_MOCK_CLIENT_TOOL=1`, otherwise the plain canned one.
 pub fn mock_client() -> Arc<dyn AgentClient> {
     if demo_mode() {
         return Arc::new(DemoAgent);
+    }
+    if std::env::var_os("AS_GUI_MOCK_CLIENT_TOOL").is_some_and(|v| v == "1") {
+        return Arc::new(MockAgent {
+            response: "",
+            chunk_chars: 4,
+            tools: Vec::new(),
+            script: Some(MockScript::Confetti),
+        });
     }
     Arc::new(MockAgent {
         response: MOCK_REPLY,

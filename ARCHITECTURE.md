@@ -9,7 +9,8 @@ as-gui is one Rust crate (edition 2024). It is a chat front end for Algolia Agen
 3. The decoder turns lines into `StreamEvent`s. The thread stamps each one with a time and sends it down the channel, followed by `Finished` or `Failed`.
 4. Each frame, `chat::poll` drains the channel. `apply_at` records the event in the message's trace, then passes it to the module that owns that kind of event.
 5. The views read `Chat` and draw. Nothing in a view starts work.
-6. A stream can end on client tool calls: calls with complete input and no output. The decoder emits `ClientToolsPending`, the turn stays open and the composer stays locked, and each call waits in `Awaiting` for the user's Run or Decline, then runs on a worker thread through `ClientTools` (20 s timeout from the press). When every call of the step has a result, `continue_turn` posts the whole exchange again, ending with the same assistant message and its parts, and the new text joins that message as a new paragraph. A user turn stops after 8 such rounds.
+6. A stream can end on client tool calls: calls with complete input and no output. The decoder emits `ClientToolsPending`, the turn stays open and the composer stays locked, and each call waits in `Awaiting` for the user's Run or Decline, then runs on a worker thread through `ClientTools` (20 s timeout from the press). When every call of the step has a result, `continue_turn` posts the whole exchange again, ending with the same assistant message and its parts, and the new text joins that message as a new paragraph. A user turn stops after 8 such rounds. The turn's trace stays one trace across the continuation: a client call's span waits from `ClientToolsPending`, runs from `ClientToolRunning` (Run pressed) and ends when the result is stored, and the wait is left out of the tool and reply times and the token rate.
+7. Quick Ask doesn't run this loop. When its stream ends on client calls it records the events, shows the call with "Continue in the main window", and promote replays the events into a new main-window session (`receive_quick_ask_turn`), where the approval card lives. The panel never runs a tool.
 
 ## Design rules
 
@@ -35,7 +36,7 @@ The crate is a library with a thin binary: `src/main.rs` calls `run()` in `src/l
 - `client_tools.rs`: the `ClientTools` trait, the real `Registry`, the 20 s `run_with_timeout`, `non_empty_output` and the fakes. The registry resolves a name in order: a command bound to it, a built-in, else `Handler::Ask`. `handler` and `timeout` are asked again when Run is pressed, so a binding made while a card waits still applies.
 - `builtin_tools.rs`: `open_url` (http and https only), `copy_to_clipboard`, `notify` and `read_selection`, each validating its input and reaching the machine through `AppShell`, `Notifier` or `SelectionSource`.
 - `commands.rs`: user-defined shell commands. `CommandBindings` refuses a built-in's name. `run_command` sends the input on stdin and reads stdout as JSON or text; `CommandRunner` is the seam and `SystemRunner` starts the process without a shell, with only `PATH` and `HOME`, killing it on a timeout or past 1 MB of output.
-- `mock.rs`: the mock agent, its `MockScript::Confetti` script (a pending `throw_confetti` call, then a text reply once the history ends with its result) and the demo agent that tests, scenes and demos use.
+- `mock.rs`: the mock agent, its `MockScript::Confetti` script (`AS_GUI_MOCK_CLIENT_TOOL=1` makes the mock client use it) (a pending `throw_confetti` call, then a text reply once the history ends with its result) and the demo agent that tests, scenes and demos use.
 
 ### Chat state (`src/chat.rs` and `src/chat/`)
 

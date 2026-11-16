@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use super::{Chat, Session};
-use crate::agent::{AgentSnapshot, ChatMessage};
+use crate::agent::{AgentSnapshot, ChatMessage, StreamEvent, TurnTrace};
 use crate::loading::Load;
 
 impl Chat {
@@ -33,6 +33,35 @@ impl Chat {
                 ..AgentSnapshot::default()
             },
         };
+    }
+
+    /// Receives a Quick Ask turn that ended on client tool calls, by replaying its events as
+    /// if the main window had streamed them: the calls then wait here for Run or Decline,
+    /// and the turn continues once they answer.
+    pub fn receive_quick_ask_turn(
+        &mut self,
+        prompt: String,
+        conversation_id: Option<String>,
+        events: Vec<StreamEvent>,
+    ) {
+        let user = ChatMessage::user(self.fresh_id(), prompt.clone());
+        let mut assistant = ChatMessage::assistant(self.fresh_id());
+        assistant.trace = Some(TurnTrace::new(self.now));
+        self.sessions.push(Session {
+            id: conversation_id,
+            hidden: false,
+            title: prompt.chars().take(40).collect(),
+            messages: vec![user, assistant],
+            agent_message_id: None,
+            history: Load::Idle.finished(self.now),
+        });
+        self.current = self.sessions.len() - 1;
+        self.pending = true;
+        self.reset_client_round();
+        for event in events {
+            self.apply_at(event, self.now);
+        }
+        self.open_window();
     }
 
     /// Receives a Quick Ask exchange as a session in the main window, selected. The copy

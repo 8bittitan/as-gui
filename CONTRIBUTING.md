@@ -67,6 +67,20 @@ Two things to know when writing UI tests:
 - Modal controls are not clickable until their entrance animation settles. Call the `settle` helper before tapping.
 - A popup that opens from inside a dialog must be added to the layer list after the dialog is built. Rune only resolves an anchor against earlier nodes.
 
+## Trying a client tool
+
+A client tool is one the agent asks this app to run. To see the whole flow without an agent that declares one, run the mock agent with its client-tool script:
+
+```sh
+AS_GUI_MOCK=1 AS_GUI_MOCK_CLIENT_TOOL=1 just dev
+```
+
+Send any message. The mock answers with a call to `throw_confetti`, and the call waits on a card with Run and Decline. Nothing handles that name yet, so the card offers a result field instead: type a result and press Send result, or press Decline, and the reply carries on.
+
+To run a shell command for it, open the agent sheet (the wrench in the header, ⇧⌘, or "Agent settings" in ⌘K), choose **Command…** for `throw_confetti`, then give the program, one argument per line and a timeout in seconds. The next call shows the command line on its card, and Run starts it with no shell. The call's input arrives as JSON on stdin and stdout becomes the result (JSON when it parses, otherwise text). A non-zero exit is an error and the first 200 characters of stderr go back to the agent. A command sees only `PATH` and `HOME`, is killed at its timeout and may write at most 1 MB. The built-in tools (`open_url`, `copy_to_clipboard`, `notify`, `read_selection`) can't be replaced.
+
+Commands are saved per application and agent in the state file. In the mock they last for the session.
+
 ## Benchmarks
 
 Three recipes measure performance. `just bench-build` compiles the benchmark binary with the `perf` profile — the same codegen as release, without incremental, which can move frame timings. It is copied from Rune's own workspace profile and left unstripped on purpose, so `perf` or Instruments can attach to `target/perf/as-gui`.

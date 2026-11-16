@@ -92,6 +92,7 @@ fn a_scripted_turn_records_its_trace_at_the_event_times() {
                 output: Some("{\"hits\": []}".into()),
                 error: None,
                 open: false,
+                client: None,
             }],
             open: false,
         })

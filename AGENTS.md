@@ -24,7 +24,7 @@ The full text is in `ARCHITECTURE.md`.
 
 ## Environment
 
-- Credentials: on first launch a dialog asks for the Application ID and a search API key with the `search`, `settings` and `logs` ACLs. They are saved in the state file. `AS_GUI_MOCK=1` runs the mock agent without asking (debug builds and headless runs). `ALGOLIA_AGENT_ID` binds an agent directly and skips the picker.
+- Credentials: on first launch a dialog asks for the Application ID and a search API key with the `search`, `settings` and `logs` ACLs. They are saved in the state file. `AS_GUI_MOCK=1` runs the mock agent without asking (debug builds and headless runs); add `AS_GUI_MOCK_CLIENT_TOOL=1` and it answers with a client tool call. `ALGOLIA_AGENT_ID` binds an agent directly and skips the picker.
 - `AS_GUI_DEMO=1` swaps in the demo agent and ignores the saved state, so scenes and recordings look the same on every machine. It applies only to debug builds and headless runs. `AS_GUI_DEMO_MENU_BAR=1` is for `just demo menu-bar`.
 - Debug builds keep state in `state/` and logs in `logs/` inside the project. Release builds use `~/Library/Application Support/com.8bittitan.as-gui/` and `~/Library/Logs/com.8bittitan.as-gui/`. See `src/paths.rs`.
 - Logging goes to stderr and to a file per day, with the last seven kept. `LOG_LEVEL` sets the level and `warn` is the default. The filter applies to this crate only. Read today's log with `tail -n 200 logs/as-gui.log.$(date +%F)`.

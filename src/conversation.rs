@@ -452,7 +452,8 @@ fn search_button(k: &rune_kit::Kit, message_id: &str, index: usize) -> El {
 fn tool_step(s: &Chat, k: &rune_kit::Kit, message_id: &str, index: usize, tool: &ToolCall) -> El {
     let hits = tool.input.as_deref().and_then(SearchHit::from_json);
     let call = s.client_call(&tool.call_id);
-    let awaiting = call.is_some_and(|call| call.state == CallState::Awaiting);
+    let state = s.client_state(&tool.call_id);
+    let awaiting = state == Some(&CallState::Awaiting);
     let mut card = col()
         .key(format!("tool-step-{}", tool.name))
         .w_full()
@@ -468,12 +469,18 @@ fn tool_step(s: &Chat, k: &rune_kit::Kit, message_id: &str, index: usize, tool: 
             index,
             tool,
             hits.as_deref(),
-            awaiting,
+            state,
         ));
     match call.map(|call| &call.state) {
         Some(CallState::Awaiting) => card = card.child(approval(s, k, call.expect("matched"))),
         Some(CallState::Running) => card = card.child(running_row(k, &tool.call_id)),
         _ => {}
+    }
+    if state.is_some()
+        && !tool.open
+        && let Some(error) = &tool.error
+    {
+        card = card.child(step_error(k, &tool.name, error));
     }
     if tool.open && !awaiting {
         match (&hits, &tool.input) {
@@ -490,6 +497,28 @@ fn tool_step(s: &Chat, k: &rune_kit::Kit, message_id: &str, index: usize, tool: 
     card
 }
 
+/// What a call the app runs says about itself, in words: where it stands, and for one that
+/// ran, that it ran on this Mac.
+fn client_facts(k: &rune_kit::Kit, name: &str, state: &CallState) -> Vec<El> {
+    let (status, color) = match state {
+        CallState::Awaiting => ("Waiting for you", k.c.text_muted),
+        CallState::Running => ("Running on this Mac", k.c.text_muted),
+        CallState::Resolved(Ok(_)) => ("Done", k.c.text_muted),
+        CallState::Resolved(Err(_)) => ("Failed", k.c.danger.fg),
+        CallState::Declined => ("Declined", k.c.text_muted),
+    };
+    let mut facts = vec![
+        text(status)
+            .key(format!("tool-status-{name}"))
+            .font(k.ty.ui)
+            .color(color),
+    ];
+    if matches!(state, CallState::Resolved(_)) {
+        facts.push(text("On this Mac").font(k.ty.ui).color(k.c.text_muted));
+    }
+    facts
+}
+
 /// A step's header: icon, what it did, the query and what came back, then the search
 /// action and the disclosure, all on one line.
 fn tool_header(
@@ -498,7 +527,7 @@ fn tool_header(
     index: usize,
     tool: &ToolCall,
     hits: Option<&[SearchHit]>,
-    awaiting: bool,
+    state: Option<&CallState>,
 ) -> El {
     let id = message_id.to_string();
     let name = tool.name.clone();
@@ -506,10 +535,11 @@ fn tool_header(
     let expandable = tool.input.is_some() || failed;
     let search = tool.search_request();
     let glyph = step_glyph(tool);
-    let label = if awaiting {
-        format!("Run {}?", tool.name)
-    } else {
-        step_label(tool)
+    let label = match state {
+        Some(CallState::Awaiting) => format!("Run {}?", tool.name),
+        Some(CallState::Running) => format!("Running {}", tool.name),
+        Some(CallState::Declined) => format!("Did not run {}", tool.name),
+        Some(CallState::Resolved(_)) | None => step_label(tool),
     };
     let mut facts: Vec<El> = Vec::new();
     if let Some(query) = search.as_ref().filter(|q| !q.query.is_empty()) {
@@ -532,7 +562,9 @@ fn tool_header(
             .color(k.c.text_muted),
         );
     }
-    if failed {
+    if let Some(state) = state {
+        facts.extend(client_facts(k, &tool.name, state));
+    } else if failed {
         facts.push(
             text("Failed")
                 .key(format!("tool-failed-{}", tool.name))

@@ -86,14 +86,22 @@ fn title(s: &Chat, k: &rune_kit::Kit) -> El {
         AgentStatus::Published => "Published",
         AgentStatus::Draft => "Draft",
     };
+    let dot = || {
+        text("·")
+            .font(k.ty.small)
+            .color(k.c.text_faint)
+            .a11y_hidden()
+    };
     let mut facts = row().w_full().gap(8.0).center_y().wrap();
     facts = facts.child(text(status).font(k.ty.small).color(k.c.text_muted));
     if let Some(model) = &agent.model {
-        facts = facts.child(text(model).font(k.ty.small).color(k.c.text_muted));
+        facts = facts
+            .child(dot())
+            .child(text(model).font(k.ty.small).color(k.c.text_muted));
     }
     if let Some(colour) = s.active_colour() {
         let application = s.application_label().unwrap_or_default();
-        facts = facts.child(
+        facts = facts.child(dot()).child(
             row()
                 .key("agent-panel-application")
                 .gap(4.0)

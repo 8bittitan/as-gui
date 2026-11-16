@@ -65,6 +65,29 @@ impl Chat {
             .find(|call| !call_id.is_empty() && call.call_id == call_id)
     }
 
+    /// Puts a call into the round in `state`, as a scene fixture would find it mid-turn.
+    pub(crate) fn scene_call(&mut self, call: PendingCall, state: CallState) {
+        self.note_state(&call.call_id, state.clone());
+        self.client_round
+            .replies
+            .insert(call.call_id.clone(), TextEdit::new(""));
+        self.client_round.calls.push(ClientCall {
+            call_id: call.call_id,
+            name: call.name,
+            input: call.input,
+            state,
+        });
+    }
+
+    /// Where a client call stands, during its round and after it.
+    pub(crate) fn client_state(&self, call_id: &str) -> Option<&CallState> {
+        self.client_states.get(call_id)
+    }
+
+    fn note_state(&mut self, call_id: &str, state: CallState) {
+        self.client_states.insert(call_id.into(), state);
+    }
+
     /// The calls waiting for the user, in order.
     pub(crate) fn awaiting_calls(&self) -> impl Iterator<Item = &ClientCall> {
         self.client_round
@@ -121,6 +144,9 @@ impl Chat {
             .iter()
             .map(|call| (call.call_id.clone(), TextEdit::new("")))
             .collect();
+        for call in &calls {
+            self.note_state(&call.call_id, CallState::Awaiting);
+        }
         self.client_round.calls = calls
             .into_iter()
             .map(|call| ClientCall {
@@ -157,6 +183,8 @@ impl Chat {
         };
         call.state = CallState::Running;
         let (name, input) = (call.name.clone(), call.input.clone());
+        self.note_running(call_id);
+        self.note_state(call_id, CallState::Running);
         let timeout = tools.timeout(&name);
         let results = self.tool_tx.clone();
         let waker = self.waker.clone();
@@ -176,6 +204,15 @@ impl Chat {
         });
     }
 
+    fn note_running(&mut self, call_id: &str) {
+        self.apply_at(
+            StreamEvent::ClientToolRunning {
+                call_id: call_id.into(),
+            },
+            self.now,
+        );
+    }
+
     /// Answers the agent that the user said no.
     pub fn decline_client_call(&mut self, call_id: &str) {
         let Some(call) = self.awaiting_mut(call_id) else {
@@ -183,6 +220,7 @@ impl Chat {
         };
         call.state = CallState::Declined;
         let name = call.name.clone();
+        self.note_state(call_id, CallState::Declined);
         self.client_round.focus_wanted = true;
         self.apply_at(
             StreamEvent::ToolFailed {
@@ -212,6 +250,8 @@ impl Chat {
             serde_json::from_str(&typed).unwrap_or(Value::String(typed))
         };
         self.client_round.focus_wanted = true;
+        self.note_running(call_id);
+        self.note_state(call_id, CallState::Running);
         self.resolve_call(call_id, Ok(result));
     }
 
@@ -227,6 +267,7 @@ impl Chat {
         let result = result.map(non_empty_output);
         call.state = CallState::Resolved(result.clone());
         let name = call.name.clone();
+        self.note_state(call_id, CallState::Resolved(result.clone()));
         let ev = match result {
             Ok(output) => StreamEvent::ToolFinished {
                 call_id: call_id.into(),

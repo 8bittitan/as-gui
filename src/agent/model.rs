@@ -158,6 +158,34 @@ impl TurnTrace {
                 let span = self.closing(call_id, name, at);
                 span.error = Some(error.clone());
             }
+            StreamEvent::ClientToolsPending(calls) => {
+                for call in calls {
+                    let index = self
+                        .spans
+                        .iter()
+                        .rposition(|s| s.end.is_none() && s.call_id == call.call_id)
+                        .unwrap_or_else(|| {
+                            self.spans
+                                .push(TraceSpan::new(&call.call_id, &call.name, at, None));
+                            self.spans.len() - 1
+                        });
+                    self.spans[index].client = Some(ClientTiming {
+                        pending_at: at,
+                        run_start: None,
+                    });
+                }
+            }
+            StreamEvent::ClientToolRunning { call_id } => {
+                if let Some(timing) = self
+                    .spans
+                    .iter_mut()
+                    .rev()
+                    .find(|s| s.end.is_none() && s.call_id == *call_id)
+                    .and_then(|s| s.client.as_mut())
+                {
+                    timing.run_start = Some(at);
+                }
+            }
             StreamEvent::Finished | StreamEvent::Failed(_) => {
                 self.finished.get_or_insert(at);
             }
@@ -176,6 +204,16 @@ pub struct TraceSpan {
     pub output: Option<String>,
     pub error: Option<String>,
     pub open: bool,
+    /// Set for a call the app runs on this Mac: when it waited and when it ran.
+    pub client: Option<ClientTiming>,
+}
+
+/// A client tool's time: it waits for the user from `pending_at`, and runs from `run_start`
+/// (never, for a call the user declined).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClientTiming {
+    pub pending_at: f64,
+    pub run_start: Option<f64>,
 }
 
 impl TraceSpan {
@@ -189,6 +227,7 @@ impl TraceSpan {
             output: None,
             error: None,
             open: false,
+            client: None,
         }
     }
 }
@@ -372,6 +411,10 @@ pub enum StreamEvent {
     /// runs them and continues the turn.
     ClientToolsPending(Vec<PendingCall>),
     /// A client tool call's result, from its worker thread.
+    /// The user pressed Run: the call's time stops waiting and starts running.
+    ClientToolRunning {
+        call_id: String,
+    },
     ClientToolResolved {
         call_id: String,
         result: Result<serde_json::Value, String>,

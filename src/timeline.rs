@@ -33,7 +33,12 @@ pub struct Bar {
     pub marker: bool,
     /// A tool call that errored.
     pub failed: bool,
+    /// Seconds the bar covers: for a call run on this Mac, the time it ran.
     pub seconds: f64,
+    /// For a call run on this Mac, where its wait for the user is drawn: x and width.
+    pub wait: Option<(f32, f32)>,
+    /// How long that wait lasted.
+    pub waited: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -41,6 +46,8 @@ pub struct Summary {
     pub total: f64,
     pub first_token: Option<f64>,
     pub tools: f64,
+    /// Time spent waiting for the user's approval.
+    pub waiting: f64,
     pub reply: Option<f64>,
 }
 
@@ -56,6 +63,42 @@ fn turn_end(trace: &TurnTrace, now: f64) -> f64 {
         .chain(trace.last_token)
         .fold(trace.finished.unwrap_or(now), f64::max);
     latest.max(trace.sent)
+}
+
+/// When a client call stopped waiting and began running, else when it ended.
+fn run_from(span: &TraceSpan, now: f64) -> Option<f64> {
+    let timing = span.client?;
+    Some(
+        timing
+            .run_start
+            .unwrap_or_else(|| span_end(span, now))
+            .max(timing.pending_at),
+    )
+}
+
+/// The time between `from` and `to` that went on waiting for the user or running a client
+/// call, which isn't the model's: a reply continued after a tool holds that gap.
+fn paused_between(trace: &TurnTrace, from: f64, to: f64, now: f64) -> f64 {
+    let mut intervals: Vec<(f64, f64)> = trace
+        .spans
+        .iter()
+        .filter_map(|span| {
+            let timing = span.client?;
+            Some((timing.pending_at.max(from), span_end(span, now).min(to)))
+        })
+        .filter(|(start, end)| end > start)
+        .collect();
+    intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut total = 0.0;
+    let mut covered_to = f64::NEG_INFINITY;
+    for (start, end) in intervals {
+        let begin = start.max(covered_to);
+        if end > begin {
+            total += end - begin;
+        }
+        covered_to = covered_to.max(end);
+    }
+    total
 }
 
 fn reply_end(trace: &TurnTrace, now: f64) -> Option<f64> {
@@ -97,6 +140,8 @@ pub fn bars(trace: &TurnTrace, width: f32, now: f64) -> Vec<Bar> {
         marker,
         failed: false,
         seconds: request_end - trace.sent,
+        wait: None,
+        waited: 0.0,
     });
 
     for (i, span) in trace.spans.iter().enumerate() {
@@ -105,7 +150,12 @@ pub fn bars(trace: &TurnTrace, width: f32, now: f64) -> Vec<Bar> {
             .iter()
             .filter(|earlier| span_end(earlier, now) > span.start)
             .count();
-        let (x, w, marker) = place(span.start, end);
+        let ran_from = run_from(span, now).unwrap_or(span.start);
+        let (x, w, marker) = place(ran_from, end);
+        let wait = span.client.map(|timing| {
+            let (wait_x, wait_w, _) = place(timing.pending_at, ran_from);
+            (wait_x, wait_w - MARKER_WIDTH.min(wait_w))
+        });
         rows.push(Bar {
             kind: RowKind::Tool(i),
             label: span.name.clone(),
@@ -114,7 +164,11 @@ pub fn bars(trace: &TurnTrace, width: f32, now: f64) -> Vec<Bar> {
             width: w,
             marker,
             failed: span.error.is_some(),
-            seconds: end - span.start,
+            seconds: end - ran_from,
+            wait,
+            waited: span
+                .client
+                .map_or(0.0, |timing| ran_from - timing.pending_at),
         });
     }
 
@@ -128,7 +182,9 @@ pub fn bars(trace: &TurnTrace, width: f32, now: f64) -> Vec<Bar> {
             width: w,
             marker,
             failed: false,
-            seconds: end - first,
+            seconds: end - first - paused_between(trace, first, end, now),
+            wait: None,
+            waited: 0.0,
         });
     }
     rows
@@ -138,7 +194,7 @@ pub fn summary(trace: &TurnTrace, now: f64) -> Summary {
     let mut intervals: Vec<(f64, f64)> = trace
         .spans
         .iter()
-        .map(|s| (s.start, span_end(s, now)))
+        .map(|s| (run_from(s, now).unwrap_or(s.start), span_end(s, now)))
         .collect();
     intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut tools = 0.0;
@@ -154,17 +210,23 @@ pub fn summary(trace: &TurnTrace, now: f64) -> Summary {
         total: turn_end(trace, now) - trace.sent,
         first_token: trace.first_token.map(|t| t - trace.sent),
         tools,
+        waiting: trace
+            .spans
+            .iter()
+            .filter_map(|s| Some(run_from(s, now)? - s.client?.pending_at))
+            .sum(),
         reply: trace
             .first_token
             .zip(reply_end(trace, now))
-            .map(|(first, end)| end - first),
+            .map(|(first, end)| end - first - paused_between(trace, first, end, now)),
     }
 }
 
 /// Tokens per second, estimated as four characters to a token between the first and last
 /// text delta.
 pub fn token_rate(trace: &TurnTrace) -> Option<f64> {
-    let span = trace.last_token? - trace.first_token?;
+    let (first, last) = (trace.first_token?, trace.last_token?);
+    let span = last - first - paused_between(trace, first, last, last);
     (span > 0.0).then(|| trace.chars as f64 / 4.0 / span)
 }
 
@@ -178,6 +240,9 @@ fn summary_line(summary: &Summary) -> String {
         parts.push(format!("first token {}", seconds(first)));
     }
     parts.push(format!("tools {}", seconds(summary.tools)));
+    if summary.waiting > 0.0 {
+        parts.push(format!("waiting for you {}", seconds(summary.waiting)));
+    }
     if let Some(reply) = summary.reply {
         parts.push(format!("reply {}", seconds(reply)));
     }
@@ -207,6 +272,9 @@ fn stats(trace: &TurnTrace, bar: &Bar) -> String {
     let mut stats = seconds(bar.seconds);
     match bar.kind {
         RowKind::Tool(i) => {
+            if bar.waited > 0.0 {
+                stats.push_str(&format!(" · waited {}", seconds(bar.waited)));
+            }
             if bar.failed {
                 stats.push_str(" · failed");
             } else if let Some(n) = hit_count(&trace.spans[i]) {
@@ -238,13 +306,26 @@ fn bar_row(k: &rune_kit::Kit, id: &str, trace: &TurnTrace, bar: &Bar) -> El {
         RowKind::Tool(_) => k.c.bg_accent,
         RowKind::Reply => k.c.icon_muted,
     };
-    let track = row()
+    let mut track = row()
         .w(TRACK_WIDTH)
         .h(BAR_HEIGHT + 6.0)
         .center_y()
         .radius(RADIUS_CONTROL)
-        .fill(k.c.layer_02)
-        .child(el().w(bar.x.min(TRACK_WIDTH - MARKER_WIDTH)))
+        .fill(k.c.layer_02);
+    let mut cursor = 0.0;
+    if let Some((wait_x, wait_width)) = bar.wait.filter(|(_, width)| *width > 0.0) {
+        track = track
+            .child(el().w(wait_x.min(TRACK_WIDTH - MARKER_WIDTH)))
+            .child(
+                el().w(wait_width)
+                    .h(BAR_HEIGHT)
+                    .radius(2.0)
+                    .fill(k.c.bg_accent.alpha(0.35)),
+            );
+        cursor = wait_x + wait_width;
+    }
+    let track = track
+        .child(el().w((bar.x - cursor).clamp(0.0, TRACK_WIDTH - MARKER_WIDTH)))
         .child(
             el().w(bar.width)
                 .h(if bar.marker {
@@ -338,6 +419,7 @@ pub fn timeline(k: &rune_kit::Kit, message_id: &str, trace: &TurnTrace, now: f64
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::ClientTiming;
 
     fn span(name: &str, start: f64, end: Option<f64>) -> TraceSpan {
         TraceSpan {
@@ -349,6 +431,7 @@ mod tests {
             output: None,
             error: None,
             open: false,
+            client: None,
         }
     }
 
@@ -473,6 +556,7 @@ mod tests {
                 total: 4.0,
                 first_token: Some(2.5),
                 tools: 1.5,
+                waiting: 0.0,
                 reply: Some(1.5),
             }
         );
@@ -494,5 +578,118 @@ mod tests {
         t.last_token = Some(1.0);
         t.chars = 40;
         assert_eq!(token_rate(&t), None);
+    }
+
+    fn client_span(pending: f64, run: Option<f64>, end: Option<f64>) -> TraceSpan {
+        let mut span = span("export", 0.5, end);
+        span.client = Some(ClientTiming {
+            pending_at: pending,
+            run_start: run,
+        });
+        span
+    }
+
+    #[test]
+    fn a_client_call_draws_its_wait_apart_from_the_time_it_ran() {
+        let t = trace(Some(5.0), vec![client_span(1.0, Some(3.0), Some(4.0))]);
+        let bar = &tool_bars(&t, 100.0, 9.0)[0];
+        assert_eq!(bar.seconds, 1.0, "the bar is the run");
+        assert_eq!(bar.waited, 2.0);
+        let (wait_x, wait_width) = bar.wait.unwrap();
+        assert_eq!(wait_x, 20.0);
+        assert!(wait_width > 0.0 && wait_x + wait_width <= bar.x + 0.001);
+        let summary = summary(&t, 9.0);
+        assert_eq!(summary.tools, 1.0);
+        assert_eq!(summary.waiting, 2.0);
+    }
+
+    #[test]
+    fn a_declined_call_is_all_wait_and_a_marker() {
+        let t = trace(Some(5.0), vec![client_span(1.0, None, Some(3.0))]);
+        let bar = &tool_bars(&t, 100.0, 9.0)[0];
+        assert!(bar.marker);
+        assert_eq!(bar.seconds, 0.0);
+        assert_eq!(bar.waited, 2.0);
+        assert_eq!(summary(&t, 9.0).tools, 0.0);
+    }
+
+    #[test]
+    fn a_server_tool_has_no_wait() {
+        let t = trace(Some(4.0), vec![span("search", 1.0, Some(2.0))]);
+        let bar = &tool_bars(&t, 100.0, 9.0)[0];
+        assert_eq!(bar.wait, None);
+        assert_eq!(summary(&t, 9.0).waiting, 0.0);
+    }
+
+    #[test]
+    fn a_reply_continued_after_a_client_call_leaves_the_pause_out_of_its_rate() {
+        let mut t = trace(Some(8.0), vec![client_span(2.0, Some(3.0), Some(5.0))]);
+        t.first_token = Some(1.0);
+        t.last_token = Some(8.0);
+        t.chars = 400;
+        assert_eq!(
+            token_rate(&t),
+            Some(100.0 / 4.0),
+            "100 tokens in 4 s of streaming"
+        );
+        assert_eq!(summary(&t, 9.0).reply, Some(4.0));
+        let reply = bars(&t, 100.0, 9.0).pop().unwrap();
+        assert_eq!(reply.seconds, 4.0);
+    }
+
+    #[test]
+    fn the_trace_records_pending_run_and_result_of_a_client_call() {
+        use crate::agent::{PendingCall, StreamEvent};
+        let mut t = TurnTrace::new(0.0);
+        t.record(
+            &StreamEvent::ToolStarted {
+                call_id: "c1".into(),
+                name: "export".into(),
+            },
+            0.5,
+        );
+        t.record(
+            &StreamEvent::ClientToolsPending(vec![PendingCall {
+                call_id: "c1".into(),
+                name: "export".into(),
+                input: serde_json::json!({}),
+            }]),
+            1.0,
+        );
+        t.record(
+            &StreamEvent::ClientToolRunning {
+                call_id: "c1".into(),
+            },
+            3.0,
+        );
+        t.record(
+            &StreamEvent::ToolFinished {
+                call_id: "c1".into(),
+                name: "export".into(),
+                output: None,
+            },
+            4.0,
+        );
+        assert_eq!(t.spans.len(), 1);
+        assert_eq!(
+            t.spans[0].client,
+            Some(ClientTiming {
+                pending_at: 1.0,
+                run_start: Some(3.0)
+            })
+        );
+        assert_eq!(t.spans[0].end, Some(4.0));
+    }
+
+    #[test]
+    fn a_continued_turn_keeps_one_trace_and_a_correct_total() {
+        let mut t = trace(None, vec![client_span(1.0, Some(2.0), Some(3.0))]);
+        t.finished = None;
+        t.first_token = Some(0.2);
+        t.last_token = Some(0.9);
+        t.record(&crate::agent::StreamEvent::TextDelta("more".into()), 3.5);
+        t.record(&crate::agent::StreamEvent::Finished, 4.0);
+        assert_eq!(summary(&t, 9.0).total, 4.0);
+        assert_eq!(t.spans.len(), 1);
     }
 }
