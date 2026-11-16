@@ -481,6 +481,19 @@ pub fn agent_panel(s: &mut Chat) {
             timeout_secs: 30,
         },
     );
+    let _ = s.set_binding(
+        "export_report",
+        ToolBinding::Command {
+            program: "/usr/local/bin/export-report".into(),
+            args: vec![
+                "--format".into(),
+                "csv".into(),
+                "--output".into(),
+                "/Users/me/Reports/last week.csv".into(),
+            ],
+            timeout_secs: 30,
+        },
+    );
     s.agent_config.config = Some(AgentConfig {
         name: "Scene agent".into(),
         description: Some(

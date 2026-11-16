@@ -232,6 +232,9 @@ fn tool_row(s: &Chat, k: &rune_kit::Kit, tool: &ClientToolDecl, portal: &mut Vec
         .as_ref()
         .is_some_and(|panel| panel.editing.as_deref() == Some(name.as_str()));
     item = item.child(handler_row(s, k, &name, binding.as_ref(), editing, portal));
+    if let (Some(ToolBinding::Command { program, args, .. }), false) = (&binding, editing) {
+        item = item.child(command_line(k, &name, program, args));
+    }
     if editing {
         item = item.child(command_form(s, k));
     }
@@ -277,13 +280,6 @@ fn handler_row(
                 .color(k.c.text_muted),
         );
     }
-    let summary = match binding {
-        Some(ToolBinding::Command { program, args, .. }) => format!(
-            "Runs {}",
-            crate::conversation::display_command(program, args)
-        ),
-        _ => "Asks you each time".to_string(),
-    };
     let current = if editing || matches!(binding, Some(ToolBinding::Command { .. })) {
         COMMAND_LABEL
     } else {
@@ -310,16 +306,54 @@ fn handler_row(
             move |s: &mut Chat, choice: &str, _: &mut Tx| s.choose_handler(&name, choice)
         })
         .build(k, portal);
-    handler = handler.child(select).child(
-        text(summary)
-            .key(format!("agent-tool-summary-{name}"))
-            .grow(1.0)
-            .min_w(0.0)
-            .wrap_anywhere()
-            .font(k.ty.small)
-            .color(k.c.text_muted),
-    );
+    handler = handler.child(select);
+    if matches!(binding, Some(ToolBinding::Command { .. })) && !editing {
+        let target = name.to_string();
+        handler = handler.child(spacer()).child(
+            satellite::button("Edit")
+                .variant(ButtonVariant::Ghost)
+                .on_press(move |s: &mut Chat| s.edit_binding(&target))
+                .sized(k, satellite::Size::Small)
+                .label(format!("Edit the command for {name}"))
+                .key(format!("agent-tool-edit-{name}")),
+        );
+    } else if binding.is_none() {
+        handler = handler.child(
+            text("Asks you each time")
+                .key(format!("agent-tool-summary-{name}"))
+                .grow(1.0)
+                .min_w(0.0)
+                .font(k.ty.small)
+                .color(k.c.text_muted),
+        );
+    }
     handler
+}
+
+/// The command a tool runs, as a monospace block of its own so a long path or argument
+/// wraps inside it instead of squeezing the select beside it.
+fn command_line(k: &rune_kit::Kit, name: &str, program: &str, args: &[String]) -> El {
+    row()
+        .key(format!("agent-tool-command-{name}"))
+        .role("group")
+        .label(format!("Command for {name}"))
+        .w_full()
+        .min_w(0.0)
+        .px(12.0)
+        .py(8.0)
+        .gap(8.0)
+        .radius(RADIUS_CONTROL)
+        .fill(k.c.layer_02)
+        .child(text("$").font(CODE).color(k.c.text_faint).a11y_hidden())
+        .child(
+            text(crate::conversation::display_command(program, args))
+                .key(format!("agent-tool-summary-{name}"))
+                .grow(1.0)
+                .min_w(0.0)
+                .wrap_anywhere()
+                .font(CODE)
+                .color(k.c.text_base),
+        )
 }
 
 fn command_form(s: &Chat, k: &rune_kit::Kit) -> El {
