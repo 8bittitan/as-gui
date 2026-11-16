@@ -133,6 +133,8 @@ pub fn tools(s: &mut Chat) {
     a.streaming = false;
     a.thought = Some(4.0);
     a.tools = vec![ToolCall {
+        call_id: String::new(),
+        provider_metadata: None,
         name: "algolia_search_index_products_markdown".into(),
         input: Some(
             serde_json::to_string_pretty(&serde_json::json!({
@@ -151,6 +153,8 @@ pub fn tools(s: &mut Chat) {
      error: None, }]
     .into_iter()
     .chain([ToolCall {
+        call_id: String::new(),
+        provider_metadata: None,
         name: "search_tool".into(),
         input: Some(
             serde_json::to_string_pretty(&serde_json::json!({
@@ -204,6 +208,8 @@ pub fn tool_error(s: &mut Chat) {
     let m = s.sessions[s.current].messages.last_mut().unwrap();
     let reason = "Cannot search in `brand` attribute, you need to add `searchable(brand)` to attributesForFaceting. (Correlation-ID: EXAMPLE-0aBcD-0123456789abcdef)";
     m.tools.push(ToolCall {
+        call_id: String::new(),
+        provider_metadata: None,
         name: "algolia_search_for_facet_values".into(),
         input: Some(
             "{\n  \"facetName\": \"brand\",\n  \"indexName\": \"products_markdown\"\n}".into(),

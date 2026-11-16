@@ -206,6 +206,7 @@ pub(crate) fn runtime(fixtures: impl FnOnce(&mut Chat)) -> Runtime<Chat> {
         response: "Hi!",
         chunk_chars: 2,
         tools: Vec::new(),
+        script: None,
     });
     let directory: Arc<dyn AgentDirectory> = Arc::new(MockDirectory {
         agents: Vec::new(),

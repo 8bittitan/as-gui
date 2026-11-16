@@ -6,6 +6,8 @@ fn a_later_tool_input_fills_the_announced_call() {
     let sender = rt.state.begin_turn("Hi");
     sender
         .send(StreamEvent::ToolUsed(ToolCall {
+            call_id: String::new(),
+            provider_metadata: None,
             name: "search_tool".into(),
             input: None,
             open: false,
@@ -15,6 +17,8 @@ fn a_later_tool_input_fills_the_announced_call() {
         .unwrap();
     sender
         .send(StreamEvent::ToolUsed(ToolCall {
+            call_id: String::new(),
+            provider_metadata: None,
             name: "search_tool".into(),
             input: Some("{\n  \"query\": \"x\"\n}".into()),
             open: false,
@@ -47,6 +51,8 @@ fn a_scripted_turn_records_its_trace_at_the_event_times() {
         );
         s.apply_at(
             StreamEvent::ToolUsed(ToolCall {
+                call_id: String::new(),
+                provider_metadata: None,
                 name: "search_tool".into(),
                 input: Some("{}".into()),
                 open: false,
@@ -102,6 +108,8 @@ fn a_call_whose_start_and_end_arrive_in_one_event_is_a_zero_width_marker() {
     rt.update(|s, _| {
         s.apply_at(
             StreamEvent::ToolUsed(ToolCall {
+                call_id: String::new(),
+                provider_metadata: None,
                 name: "load_skill_tool".into(),
                 input: Some("{}".into()),
                 open: false,
@@ -153,7 +161,7 @@ fn a_tool_failure_does_not_end_the_turn_or_raise_an_error() {
 }
 
 #[test]
-fn a_later_success_of_the_same_tool_clears_its_failure() {
+fn a_later_call_of_the_same_tool_gets_its_own_card_and_leaves_the_failure_alone() {
     let (mut rt, _) = failed_tool_chat();
     rt.update(|s, _| {
         s.sessions[0].messages[1].streaming = true;
@@ -166,9 +174,11 @@ fn a_later_success_of_the_same_tool_clears_its_failure() {
             3.0,
         );
     });
-    let tool = &rt.state.sessions[0].messages[1].tools[0];
-    assert!(tool.error.is_none());
-    assert_eq!(tool.input.as_deref(), Some("{\"facetHits\": []}"));
+    let tools = &rt.state.sessions[0].messages[1].tools;
+    assert_eq!(tools.len(), 2);
+    assert!(tools[0].error.is_some(), "the first call still failed");
+    assert!(tools[1].error.is_none());
+    assert_eq!(tools[1].input.as_deref(), Some("{\"facetHits\": []}"));
 }
 
 #[test]
@@ -303,6 +313,8 @@ fn a_result_row_shows_a_plain_excerpt_not_the_markdown() {
 #[test]
 fn a_cards_leading_icon_is_the_tool_wrench_not_a_second_magnifying_glass() {
     let tool = |name: &str, error: Option<&str>| ToolCall {
+        call_id: String::new(),
+        provider_metadata: None,
         name: name.into(),
         input: Some(SEARCH_ARGS.into()),
         open: false,

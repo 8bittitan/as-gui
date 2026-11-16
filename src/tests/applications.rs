@@ -28,6 +28,7 @@ fn with_two_apps(mut rt: Runtime<Chat>) -> Runtime<Chat> {
                 response: "Hi!",
                 chunk_chars: 2,
                 tools: Vec::new(),
+                script: None,
             });
             let id = application.app_id[..3].to_lowercase();
             let directory: Arc<dyn crate::agent::AgentDirectory> = Arc::new(MockDirectory {

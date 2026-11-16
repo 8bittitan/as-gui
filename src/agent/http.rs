@@ -60,14 +60,24 @@ pub fn spawn_stream(
 
 /// The completions request body: the exchange's messages, and the conversation `id` when
 /// the turn continues one — the server then appends to it instead of starting a new one.
+/// Only a trailing assistant message goes out as its parts: that is a turn continuing after
+/// client tools ran. Every other message is its text.
 fn request_body(history: &[ChatMessage], conversation: Option<&str>) -> serde_json::Value {
+    let last = history.len().saturating_sub(1);
     let messages: Vec<_> = history
         .iter()
-        .map(|m| {
+        .enumerate()
+        .map(|(index, m)| {
+            let replay = index == last && m.role == Role::Assistant && !m.parts.is_empty();
+            let parts: Vec<_> = if replay {
+                m.parts.iter().filter_map(part_json).collect()
+            } else {
+                vec![json!({ "type": "text", "text": m.text })]
+            };
             json!({
                 "id": m.id,
                 "role": if m.role == Role::User { "user" } else { "assistant" },
-                "parts": [{ "type": "text", "text": m.text }],
+                "parts": parts,
             })
         })
         .collect();
@@ -75,6 +85,38 @@ fn request_body(history: &[ChatMessage], conversation: Option<&str>) -> serde_js
         Some(id) => json!({ "id": id, "messages": messages }),
         None => json!({ "messages": messages }),
     }
+}
+
+fn part_json(part: &Part) -> Option<serde_json::Value> {
+    match part {
+        Part::StepStart => Some(json!({ "type": "step-start" })),
+        Part::Text(text) if text.is_empty() => None,
+        Part::Text(text) => Some(json!({ "type": "text", "text": text })),
+        Part::Tool(tool) => Some(tool_part_json(tool)),
+    }
+}
+
+fn tool_part_json(tool: &ToolPart) -> serde_json::Value {
+    let mut part = json!({
+        "type": format!("tool-{}", tool.name),
+        "toolCallId": tool.call_id,
+        "input": tool.input,
+    });
+    match tool.state {
+        ToolState::InputAvailable => part["state"] = json!("input-available"),
+        ToolState::OutputAvailable => {
+            part["state"] = json!("output-available");
+            part["output"] = non_empty_output(tool.output.clone().unwrap_or_default());
+        }
+        ToolState::OutputError => {
+            part["state"] = json!("output-error");
+            part["errorText"] = json!(tool.error.as_deref().unwrap_or("The tool call failed."));
+        }
+    }
+    if let Some(metadata) = &tool.provider_metadata {
+        part["callProviderMetadata"] = metadata.clone();
+    }
+    part
 }
 
 pub struct AlgoliaClient {
@@ -368,6 +410,7 @@ mod tests {
             response: "Hi",
             chunk_chars: 8,
             tools: Vec::new(),
+            script: None,
         });
         spawn_stream(
             client,
@@ -459,6 +502,167 @@ mod tests {
         assert_eq!(
             continuing["id"], "alg_cnv_1",
             "the turn continues the conversation"
+        );
+    }
+
+    fn tool(call_id: &str, name: &str, state: ToolState) -> ToolPart {
+        ToolPart {
+            call_id: call_id.into(),
+            name: name.into(),
+            input: json!({ "q": call_id }),
+            state,
+            output: None,
+            error: None,
+            provider_metadata: None,
+        }
+    }
+
+    fn continued(parts: Vec<Part>) -> serde_json::Value {
+        let mut reply = ChatMessage::assistant("m2");
+        reply.text = "ignored: the parts are what goes out".into();
+        reply.parts = parts;
+        request_body(&[ChatMessage::user("m1", "Hello"), reply], Some("c1"))
+    }
+
+    #[test]
+    fn the_trailing_message_replays_its_parts_in_order() {
+        let mut call = tool("c1", "throw_confetti", ToolState::OutputAvailable);
+        call.output = Some(json!({ "ok": true }));
+        call.provider_metadata = Some(json!({ "google": { "thoughtSignature": "sig" } }));
+        let body = continued(vec![
+            Part::StepStart,
+            Part::Text("Let's celebrate.".into()),
+            Part::Tool(call),
+        ]);
+        assert_eq!(
+            body["messages"][1],
+            json!({
+                "id": "m2",
+                "role": "assistant",
+                "parts": [
+                    { "type": "step-start" },
+                    { "type": "text", "text": "Let's celebrate." },
+                    {
+                        "type": "tool-throw_confetti",
+                        "toolCallId": "c1",
+                        "state": "output-available",
+                        "input": { "q": "c1" },
+                        "output": { "ok": true },
+                        "callProviderMetadata": { "google": { "thoughtSignature": "sig" } },
+                    },
+                ],
+            })
+        );
+        assert_eq!(
+            body["messages"][0]["parts"],
+            json!([{ "type": "text", "text": "Hello" }]),
+            "earlier messages stay text-only"
+        );
+    }
+
+    #[test]
+    fn a_mixed_step_sends_both_calls_with_their_results() {
+        let mut server = tool("s1", "search", ToolState::OutputAvailable);
+        server.output = Some(json!({ "hits": [1] }));
+        let mut client = tool("c1", "throw_confetti", ToolState::OutputAvailable);
+        client.output = Some(json!("done"));
+        let body = continued(vec![
+            Part::StepStart,
+            Part::Tool(server),
+            Part::Tool(client),
+        ]);
+        let parts = body["messages"][1]["parts"].as_array().unwrap();
+        assert_eq!(parts[1]["output"], json!({ "hits": [1] }));
+        assert_eq!(parts[2]["output"], json!("done"));
+    }
+
+    #[test]
+    fn an_empty_output_is_sent_as_ok_true() {
+        let mut empty = tool("c1", "t", ToolState::OutputAvailable);
+        empty.output = Some(json!({}));
+        let missing = tool("c2", "t", ToolState::OutputAvailable);
+        let body = continued(vec![Part::Tool(empty), Part::Tool(missing)]);
+        let parts = body["messages"][1]["parts"].as_array().unwrap();
+        assert_eq!(parts[0]["output"], json!({ "ok": true }));
+        assert_eq!(parts[1]["output"], json!({ "ok": true }));
+    }
+
+    #[test]
+    fn a_failure_is_sent_as_an_output_error_with_its_text() {
+        let mut failed = tool("c1", "t", ToolState::OutputError);
+        failed.error = Some("Timed out".into());
+        let body = continued(vec![Part::Tool(failed)]);
+        let part = &body["messages"][1]["parts"][0];
+        assert_eq!(part["state"], "output-error");
+        assert_eq!(part["errorText"], "Timed out");
+        assert!(part.get("output").is_none());
+    }
+
+    #[test]
+    fn a_call_still_waiting_is_sent_as_input_available() {
+        let body = continued(vec![Part::Tool(tool("c1", "t", ToolState::InputAvailable))]);
+        let part = &body["messages"][1]["parts"][0];
+        assert_eq!(part["state"], "input-available");
+        assert!(part.get("output").is_none());
+    }
+
+    #[test]
+    fn data_parts_loaded_from_history_never_go_out() {
+        let history = parse_conversation(
+            r#"{ "id": "c1", "messages": [
+                { "id": "m1", "role": "user", "parts": [{ "type": "text", "text": "Hi" }] },
+                { "id": "m2", "role": "assistant", "parts": [
+                    { "type": "data-suggestions", "data": { "suggestions": ["More"] } },
+                    { "type": "text", "text": "Hello" },
+                    { "type": "data-tool-output-metadata", "data": {} }
+                ] }
+            ] }"#,
+        )
+        .unwrap();
+        let body = request_body(&history, Some("c1"));
+        assert_eq!(
+            body["messages"][1]["parts"],
+            json!([{ "type": "text", "text": "Hello" }])
+        );
+    }
+
+    #[test]
+    fn a_loaded_conversation_that_ends_on_a_resolved_tool_replays_it() {
+        let history = parse_conversation(
+            r#"{ "id": "c1", "messages": [
+                { "id": "m1", "role": "user", "parts": [{ "type": "text", "text": "Party" }] },
+                { "id": "m2", "role": "assistant", "parts": [
+                    { "type": "text", "text": "Sure." },
+                    { "type": "tool-call", "toolCallId": "t1", "toolName": "throw_confetti",
+                      "args": { "count": 5 } },
+                    { "type": "tool-result", "toolCallId": "t1", "toolName": "throw_confetti",
+                      "output": { "type": "json", "value": { "ok": true } } }
+                ] }
+            ] }"#,
+        )
+        .unwrap();
+        let body = request_body(&history, Some("c1"));
+        assert_eq!(
+            body["messages"][1]["parts"],
+            json!([
+                { "type": "text", "text": "Sure." },
+                {
+                    "type": "tool-throw_confetti",
+                    "toolCallId": "t1",
+                    "state": "output-available",
+                    "input": { "count": 5 },
+                    "output": { "ok": true },
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn a_trailing_user_message_is_text_only() {
+        let body = request_body(&[ChatMessage::user("m1", "Hello")], None);
+        assert_eq!(
+            body["messages"][0]["parts"],
+            json!([{ "type": "text", "text": "Hello" }])
         );
     }
 }

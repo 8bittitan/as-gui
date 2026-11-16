@@ -6,6 +6,7 @@
 
 mod appearance;
 mod applications;
+mod client_tools;
 mod directory;
 mod keybinds;
 mod message_actions;
@@ -26,7 +27,8 @@ use rune::{TextEdit, Tx, Waker};
 use rune_kit::ShortcutRecorderState;
 
 use crate::agent::{
-    AgentClient, AgentDirectory, AgentInfo, AgentSnapshot, ChatMessage, IndexSearch, StreamEvent,
+    AgentClient, AgentDirectory, AgentInfo, AgentSnapshot, ChatMessage, ClientTools, IndexSearch,
+    StreamEvent,
 };
 use crate::command_bar::CommandBar;
 use crate::keymap::{Action, Keymap, Registration, ShortcutRegistrar};
@@ -84,6 +86,14 @@ pub struct Chat {
     /// The "search it yourself" panel beside the chat.
     pub search: SearchPanel,
     pub index_search: Arc<dyn IndexSearch>,
+    /// What runs the tools the agent asks the app to run; tests inject a fake.
+    pub client_tools: Arc<dyn ClientTools>,
+    client_round: client_tools::ClientRound,
+    tool_results: Receiver<client_tools::ToolResult>,
+    tool_tx: Sender<client_tools::ToolResult>,
+    /// Whether the next streamed text opens a new paragraph: a continued turn adds to the
+    /// text it already has.
+    continuation_break: bool,
     /// What Ask about selection captures through; settings shows its permission.
     pub selection: Arc<dyn SelectionSource>,
     pub width_select_open: bool,
@@ -145,6 +155,7 @@ pub struct Chat {
 impl Chat {
     pub fn new(client: Arc<dyn AgentClient>, directory: Arc<dyn AgentDirectory>) -> Chat {
         let (load_tx, loads) = mpsc::channel();
+        let (tool_tx, tool_results) = mpsc::channel();
         Chat {
             client,
             directory,
@@ -172,6 +183,11 @@ impl Chat {
             hits_expanded: Default::default(),
             search: SearchPanel::default(),
             index_search: Arc::new(crate::agent::AutoSearch),
+            client_tools: Arc::new(crate::agent::NoClientTools),
+            client_round: Default::default(),
+            tool_results,
+            tool_tx,
+            continuation_break: false,
             selection: Arc::new(crate::selection::NoSelection),
             width_select_open: false,
             appearance: Appearance::default(),
@@ -264,12 +280,16 @@ impl Chat {
             | StreamEvent::ConversationStarted(_)
             | StreamEvent::Suggestions(_)
             | StreamEvent::TextDelta(_)
+            | StreamEvent::StepStart
             | StreamEvent::ToolUsed(_)
             | StreamEvent::ToolStarted { .. }
             | StreamEvent::ToolFailed { .. }
             | StreamEvent::ToolFinished { .. }
             | StreamEvent::Finished
             | StreamEvent::Failed(_) => self.apply_turn(ev),
+            StreamEvent::ClientToolsPending(_) | StreamEvent::ClientToolResolved { .. } => {
+                self.apply_client_tools(ev)
+            }
             StreamEvent::SearchLoaded { .. } | StreamEvent::SearchFailed { .. } => {
                 self.apply_search(ev)
             }
@@ -288,7 +308,8 @@ pub fn setup(s: &mut Chat, waker: Waker) {
 }
 
 /// Advances everything one frame: applies renamed applications, starts the next load, applies
-/// landed loads, tracks the loading views and drains the turn. True when state changed.
+/// landed loads, tracks the loading views, drains the turn and continues it once its client
+/// tools have answered. True when state changed.
 pub fn poll(s: &mut Chat, t: f64, tx: &mut Tx) -> bool {
     s.now = t;
     let mut changed = false;
@@ -301,5 +322,6 @@ pub fn poll(s: &mut Chat, t: f64, tx: &mut Tx) -> bool {
     changed |= s.drain_loads();
     changed |= s.track_views(t, tx);
     changed |= s.drain_turn(t);
+    changed |= s.drain_client_tools();
     changed
 }

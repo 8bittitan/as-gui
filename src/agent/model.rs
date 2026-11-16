@@ -16,6 +16,8 @@ pub struct ChatMessage {
     pub role: Role,
     pub text: String,
     pub tools: Vec<ToolCall>,
+    /// The reply as the stream laid it out, which a continued turn replays to the server.
+    pub parts: Vec<Part>,
     /// Seconds the turn spent "thinking", recorded when the stream settles.
     pub thought: Option<f64>,
     pub streaming: bool,
@@ -25,6 +27,44 @@ pub struct ChatMessage {
     pub suggestions: Option<Vec<String>>,
     /// Where this live turn's time went; history loaded from the API has none.
     pub trace: Option<TurnTrace>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Part {
+    StepStart,
+    Text(String),
+    Tool(ToolPart),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolPart {
+    pub call_id: String,
+    pub name: String,
+    pub input: serde_json::Value,
+    pub state: ToolState,
+    pub output: Option<serde_json::Value>,
+    pub error: Option<String>,
+    /// Sent back as `callProviderMetadata`: some providers need it to accept the result.
+    pub provider_metadata: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolState {
+    InputAvailable,
+    OutputAvailable,
+    OutputError,
+}
+
+/// A tool call the stream ended on without an output: the client has to run it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingCall {
+    pub call_id: String,
+    pub name: String,
+    pub input: serde_json::Value,
+}
+
+fn json_of(text: &str) -> serde_json::Value {
+    serde_json::from_str(text).unwrap_or_else(|_| serde_json::Value::String(text.into()))
 }
 
 /// When a live turn's events arrived, in seconds on the app's frame clock.
@@ -82,7 +122,14 @@ impl TurnTrace {
                 self.spans.push(TraceSpan::new(call_id, name, at, None));
             }
             StreamEvent::ToolUsed(call) => {
-                match self.spans.iter_mut().rev().find(|s| s.name == call.name) {
+                let same_call = |s: &TraceSpan| {
+                    if call.call_id.is_empty() || s.call_id.is_empty() {
+                        s.name == call.name
+                    } else {
+                        s.call_id == call.call_id
+                    }
+                };
+                match self.spans.iter_mut().rev().find(|s| same_call(s)) {
                     Some(span) => {
                         if call.input.is_some() {
                             span.input = call.input.clone();
@@ -154,6 +201,7 @@ impl ChatMessage {
             role: Role::User,
             text: text.into(),
             tools: Vec::new(),
+            parts: Vec::new(),
             thought: None,
             streaming: false,
             vote: None,
@@ -168,6 +216,7 @@ impl ChatMessage {
             role: Role::Assistant,
             text: String::new(),
             tools: Vec::new(),
+            parts: Vec::new(),
             thought: None,
             streaming: true,
             vote: None,
@@ -177,9 +226,81 @@ impl ChatMessage {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl ChatMessage {
+    /// Appends streamed text to the last text part, or opens one: text after a tool or a
+    /// step starts a part of its own, and the paragraph break that marked it is dropped.
+    pub fn push_text(&mut self, delta: &str) {
+        self.text.push_str(delta);
+        if let Some(Part::Text(text)) = self.parts.last_mut() {
+            text.push_str(delta);
+        } else {
+            self.parts
+                .push(Part::Text(delta.trim_start_matches('\n').to_string()));
+        }
+    }
+
+    fn tool_part_mut(&mut self, call_id: &str, name: &str) -> Option<&mut ToolPart> {
+        let mut tools = self.parts.iter_mut().filter_map(|part| match part {
+            Part::Tool(tool) => Some(tool),
+            _ => None,
+        });
+        if call_id.is_empty() {
+            tools.rfind(|tool| tool.name == name)
+        } else {
+            tools.find(|tool| tool.call_id == call_id)
+        }
+    }
+
+    fn tool_part_or_new(&mut self, call_id: &str, name: &str) -> &mut ToolPart {
+        if self.tool_part_mut(call_id, name).is_none() {
+            self.parts.push(Part::Tool(ToolPart {
+                call_id: call_id.into(),
+                name: name.into(),
+                input: serde_json::Value::Null,
+                state: ToolState::InputAvailable,
+                output: None,
+                error: None,
+                provider_metadata: None,
+            }));
+        }
+        self.tool_part_mut(call_id, name)
+            .expect("the part was just pushed")
+    }
+
+    /// Records a call whose input arrived complete.
+    pub fn note_tool_input(&mut self, call: &ToolCall) {
+        let part = self.tool_part_or_new(&call.call_id, &call.name);
+        part.input = call
+            .input
+            .as_deref()
+            .map_or(serde_json::Value::Null, json_of);
+        if call.provider_metadata.is_some() {
+            part.provider_metadata = call.provider_metadata.clone();
+        }
+    }
+
+    pub fn note_tool_output(&mut self, call_id: &str, name: &str, output: Option<&str>) {
+        let part = self.tool_part_or_new(call_id, name);
+        part.state = ToolState::OutputAvailable;
+        part.output = output.map(json_of);
+        part.error = None;
+    }
+
+    pub fn note_tool_error(&mut self, call_id: &str, name: &str, error: &str) {
+        let part = self.tool_part_or_new(call_id, name);
+        part.state = ToolState::OutputError;
+        part.output = None;
+        part.error = Some(error.into());
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct ToolCall {
+    /// The stream's id for the call; empty for history that predates ids.
+    pub call_id: String,
     pub name: String,
+    /// `providerMetadata` from the call's `tool-input-available`.
+    pub provider_metadata: Option<serde_json::Value>,
     /// Pretty-printed JSON of the call's input (or output), when the stream carried one.
     pub input: Option<String>,
     /// The call's own arguments, kept when its result replaces `input`.
@@ -237,6 +358,16 @@ pub enum StreamEvent {
     /// The id the server persists this turn under, from the response's `X-Conversation-Id`
     /// header: a new conversation's id, or the one the request continued.
     ConversationStarted(String),
+    /// A step began (`start-step`): the next text and tools belong to it.
+    StepStart,
+    /// The stream ended with these calls holding complete input and no output: the client
+    /// runs them and continues the turn.
+    ClientToolsPending(Vec<PendingCall>),
+    /// A client tool call's result, from its worker thread.
+    ClientToolResolved {
+        call_id: String,
+        result: Result<serde_json::Value, String>,
+    },
     /// Prompt suggestions the agent offered with its reply (`data-suggestions`).
     Suggestions(Vec<String>),
     /// A "search it yourself" run's page, tagged with the run that asked for it.
@@ -295,6 +426,7 @@ impl Default for AgentSnapshot {
                 response: MOCK_REPLY,
                 chunk_chars: 24,
                 tools: Vec::new(),
+                script: None,
             }),
             theme: Default::default(),
             accent: Default::default(),

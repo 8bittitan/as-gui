@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Sender};
 use std::time::Instant;
 
 use super::Chat;
-use crate::agent::{ChatMessage, Role, StreamEvent, ToolCall, TurnTrace, spawn_stream};
+use crate::agent::{ChatMessage, Part, Role, StreamEvent, ToolCall, TurnTrace, spawn_stream};
 use crate::loading::Load;
 
 /// A turn event with the moment the request thread handed it over.
@@ -21,13 +21,13 @@ pub struct Timed {
 pub struct TurnSender(Sender<Timed>);
 
 impl TurnSender {
-    pub fn send(&self, event: StreamEvent) -> Result<(), mpsc::SendError<StreamEvent>> {
+    pub fn send(&self, event: StreamEvent) -> Result<(), Box<mpsc::SendError<StreamEvent>>> {
         self.0
             .send(Timed {
                 event,
                 at: Instant::now(),
             })
-            .map_err(|e| mpsc::SendError(e.0.event))
+            .map_err(|e| Box::new(mpsc::SendError(e.0.event)))
     }
 }
 
@@ -47,6 +47,7 @@ impl Chat {
         session.messages.push(assistant);
         self.pending = true;
         self.error = None;
+        self.reset_client_round();
         self.open_turn_channel()
     }
 
@@ -64,6 +65,7 @@ impl Chat {
         self.events = None;
         self.turn_started = None;
         self.pending = false;
+        self.reset_client_round();
         if let Some(m) = self.sessions[self.current].messages.last_mut() {
             m.streaming = false;
         }
@@ -86,13 +88,20 @@ impl Chat {
         let Some(m) = self.streaming_message() else {
             return;
         };
-        match m.tools.iter_mut().find(|t| t.name == call.name) {
+        let same_call = |t: &ToolCall| {
+            if t.call_id.is_empty() || call.call_id.is_empty() {
+                t.name == call.name
+            } else {
+                t.call_id == call.call_id
+            }
+        };
+        match m.tools.iter_mut().find(|t| same_call(t)) {
             Some(t) if call.input.is_some() => {
                 if call.request.is_some() {
                     t.request = call.request;
                 }
                 t.input = call.input;
-                // Calls merge by name: a result means the tool's latest attempt worked.
+                // A result means the call's latest attempt worked.
                 t.error = None;
             }
             Some(t) if call.error.is_some() => t.error = call.error,
@@ -161,9 +170,27 @@ impl Chat {
         session.messages.push(assistant);
         self.pending = true;
         self.error = None;
+        self.reset_client_round();
         tracing::info!("retrying the turn for {}", message_id);
         let sender = self.open_turn_channel();
         let history = self.history_for_request();
+        self.spawn_turn(sender, history);
+    }
+
+    /// Sends the exchange again, up to and including the assistant message the client tools
+    /// answered, so the reply goes on in that same message.
+    pub(super) fn continue_turn(&mut self) {
+        let sender = self.open_turn_channel();
+        self.pending = true;
+        self.continuation_break = true;
+        if let Some(m) = self.streaming_message() {
+            m.streaming = true;
+            if let Some(trace) = m.trace.as_mut() {
+                trace.finished = None;
+            }
+        }
+        let history = self.sessions[self.current].messages.clone();
+        tracing::info!("continuing the turn after client tools");
         self.spawn_turn(sender, history);
     }
 
@@ -221,36 +248,75 @@ impl Chat {
                     m.suggestions = Some(suggestions);
                 }
             }
-            StreamEvent::TextDelta(t) => {
+            StreamEvent::StepStart => {
                 if let Some(m) = self.streaming_message() {
-                    m.text.push_str(&t);
+                    m.parts.push(Part::StepStart);
+                }
+            }
+            StreamEvent::TextDelta(t) => {
+                let new_paragraph = std::mem::take(&mut self.continuation_break);
+                if let Some(m) = self.streaming_message() {
+                    if new_paragraph && !m.text.is_empty() {
+                        m.push_text(&format!("\n\n{t}"));
+                    } else {
+                        m.push_text(&t);
+                    }
                 }
             }
             StreamEvent::ToolUsed(mut call) => {
+                if let Some(m) = self.streaming_message() {
+                    m.note_tool_input(&call);
+                }
                 call.request = call.input.clone();
                 self.merge_tool(call);
             }
-            StreamEvent::ToolStarted { name, .. } => self.merge_tool(ToolCall {
+            StreamEvent::ToolStarted { call_id, name } => self.merge_tool(ToolCall {
+                call_id,
+                provider_metadata: None,
                 name,
                 input: None,
                 open: false,
                 request: None,
                 error: None,
             }),
-            StreamEvent::ToolFailed { name, error, .. } => self.merge_tool(ToolCall {
+            StreamEvent::ToolFailed {
+                call_id,
                 name,
-                input: None,
-                request: None,
-                error: Some(error),
-                open: false,
-            }),
-            StreamEvent::ToolFinished { name, output, .. } => self.merge_tool(ToolCall {
+                error,
+            } => {
+                if let Some(m) = self.streaming_message() {
+                    m.note_tool_error(&call_id, &name, &error);
+                }
+                self.merge_tool(ToolCall {
+                    call_id,
+                    provider_metadata: None,
+                    name,
+                    input: None,
+                    request: None,
+                    error: Some(error),
+                    open: false,
+                })
+            }
+            StreamEvent::ToolFinished {
+                call_id,
                 name,
-                input: output,
-                open: false,
-                request: None,
-                error: None,
-            }),
+                output,
+            } => {
+                if let Some(m) = self.streaming_message() {
+                    m.note_tool_output(&call_id, &name, output.as_deref());
+                }
+                self.merge_tool(ToolCall {
+                    call_id,
+                    provider_metadata: None,
+                    name,
+                    input: output,
+                    open: false,
+                    request: None,
+                    error: None,
+                })
+            }
+            // The stream ended on client tool calls: the reply isn't done until they answer.
+            StreamEvent::Finished if self.client_round_open() => {}
             StreamEvent::Finished => {
                 if let Some(m) = self.streaming_message() {
                     m.streaming = false;
@@ -259,6 +325,7 @@ impl Chat {
                 self.maybe_notify();
             }
             StreamEvent::Failed(e) => {
+                self.reset_client_round();
                 if let Some(m) = self.streaming_message() {
                     m.streaming = false;
                 }
@@ -282,7 +349,12 @@ impl Chat {
         while let Some(receiver) = self.events.as_ref() {
             match receiver.try_recv() {
                 Ok(Timed { event, at }) => {
-                    if matches!(event, StreamEvent::Finished | StreamEvent::Failed(_)) {
+                    let settles = match event {
+                        StreamEvent::Finished => !self.client_round_open(),
+                        StreamEvent::Failed(_) => true,
+                        _ => false,
+                    };
+                    if settles {
                         self.record_thought(t);
                     }
                     let received = self.turn_origin.map_or(t, |(origin, base)| {
@@ -300,7 +372,8 @@ impl Chat {
         }
         if dead {
             self.events = None;
-            if self.pending {
+            // A stream that ended on client tool calls is finished: the turn waits on them.
+            if self.pending && !self.client_round_open() {
                 self.record_thought(t);
                 self.pending = false;
                 if let Some(m) = self.sessions[self.current].messages.last_mut() {

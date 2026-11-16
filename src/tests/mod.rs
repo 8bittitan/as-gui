@@ -23,6 +23,7 @@ mod accessibility;
 mod applications;
 mod ask_selection;
 mod buttons;
+mod client_tools;
 mod command_bar;
 mod conversation;
 mod hit_reader;
@@ -50,6 +51,7 @@ fn test_chat_sized(size: (f32, f32)) -> Runtime<Chat> {
         response: "Hi!",
         chunk_chars: 2,
         tools: Vec::new(),
+        script: None,
     });
     let directory = Arc::new(MockDirectory {
         agents: Vec::new(),
@@ -87,6 +89,7 @@ fn offline_connector(agents: Vec<AgentInfo>) -> chat::Connector {
             response: "Hi!",
             chunk_chars: 2,
             tools: Vec::new(),
+            script: None,
         });
         let directory: Arc<dyn crate::agent::AgentDirectory> = Arc::new(MockDirectory {
             agents: agents.clone(),
@@ -216,6 +219,7 @@ fn quick_ask_sized(size: (f32, f32)) -> Runtime<QuickAsk> {
             response: "Quick answer",
             chunk_chars: 4,
             tools: Vec::new(),
+            script: None,
         }),
         ..AgentSnapshot::default()
     }));
@@ -329,6 +333,8 @@ fn failed_tool_chat() -> (Runtime<Chat>, String) {
         );
         s.apply_at(
             StreamEvent::ToolUsed(ToolCall {
+                call_id: String::new(),
+                provider_metadata: None,
                 name: "facet_tool".into(),
                 input: Some("{\"facetName\": \"brand\"}".into()),
                 request: None,

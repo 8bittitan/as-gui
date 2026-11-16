@@ -1256,6 +1256,8 @@ fn tool_events_build_a_collapsible_group_with_json() {
     let sender = rt.state.begin_turn("Schedule something");
     sender
         .send(StreamEvent::ToolUsed(ToolCall {
+            call_id: String::new(),
+            provider_metadata: None,
             name: "schedule_task_tool".into(),
             input: Some("{\n  \"cron\": \"0 9 * * 1-5\"\n}".into()),
             open: false,

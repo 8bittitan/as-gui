@@ -9,6 +9,7 @@ as-gui is one Rust crate (edition 2024). It is a chat front end for Algolia Agen
 3. The decoder turns lines into `StreamEvent`s. The thread stamps each one with a time and sends it down the channel, followed by `Finished` or `Failed`.
 4. Each frame, `chat::poll` drains the channel. `apply_at` records the event in the message's trace, then passes it to the module that owns that kind of event.
 5. The views read `Chat` and draw. Nothing in a view starts work.
+6. A stream can end on client tool calls: calls with complete input and no output. The decoder emits `ClientToolsPending`, the turn stays open and the composer stays locked, and each call runs on a worker thread through `ClientTools` (20 s timeout). When every call of the step has a result, `continue_turn` posts the whole exchange again, ending with the same assistant message and its parts, and the new text joins that message as a new paragraph. A user turn stops after 8 such rounds.
 
 ## Design rules
 
@@ -16,7 +17,7 @@ The rules come from treating a seam as the place where behavior can change witho
 
 - **One feature, one `impl Chat` block, in its own module.** Feature behavior lives in a child module of `chat` (`src/chat/*.rs`) or in the feature's own module. `chat.rs` holds the struct, a few shared helpers, the `apply_at` router and the `poll` list, and no feature logic.
 - **Events are routed, not handled in one place.** A new `StreamEvent` variant gets handled in the owning module's `apply_*` function and one arm in `apply_at`. The router has no wildcard arm, so the compiler flags a variant with no owner. A new per-frame job is a method on its module that `poll` calls, and `poll` stays a list of calls.
-- **Traits are the seams to the outside world.** `AgentClient`, `AgentDirectory`, `IndexSearch`, `ShortcutRegistrar`, `Notifier`, `SelectionSource`, `AppShell`, `StatusItem` and `Connector` let tests swap in fakes. Code that reaches the network, the OS or the clock goes behind a trait.
+- **Traits are the seams to the outside world.** `AgentClient`, `AgentDirectory`, `ClientTools`, `IndexSearch`, `ShortcutRegistrar`, `Notifier`, `SelectionSource`, `AppShell`, `StatusItem` and `Connector` let tests swap in fakes. Code that reaches the network, the OS or the clock goes behind a trait.
 - **Keep seams narrow.** Child modules can see `Chat`'s private fields, so most fields stay private. A helper that another module needs is `pub(super)`, not `pub`.
 - **Find the seam before splitting a file.** Locate each feature's methods, events and share of `poll`, then move whole blocks and change only visibility and dispatch.
 
@@ -26,18 +27,20 @@ The crate is a library with a thin binary: `src/main.rs` calls `run()` in `src/l
 
 ### Agent client (`src/agent/`)
 
-- `model.rs`: messages, tool calls, turn traces, `StreamEvent`, agent and session info.
-- `sse.rs`: the stream `Decoder` and the line parsers. It speaks the AI SDK v5 data-stream protocol. Only an `error` part ends a turn. A tool output carries no tool name, so the decoder names it from the call's start event and drops outputs for calls that never started. `tool-output-error` and `tool-input-error` fail one call and let the turn go on. Guardrail blocks show their fallback text as the reply. Reasoning parts are ignored.
+- `model.rs`: messages, tool calls, turn traces, `StreamEvent`, agent and session info. A `ChatMessage` keeps `text` and `tools` for the views and `parts` (`StepStart`, `Text`, `Tool`) in stream order, which is what a continued request replays. Tool calls match by call id, and by name only when the id is empty (history from before ids).
+- `sse.rs`: the stream `Decoder` and the line parsers. It speaks the AI SDK v5 data-stream protocol. Only an `error` part ends a turn. A tool output carries no tool name, so the decoder names it from the call's start event and drops outputs for calls that never started. `tool-output-error` and `tool-input-error` fail one call and let the turn go on. Guardrail blocks show their fallback text as the reply. Reasoning parts are ignored. `Decoder::finish` emits `ClientToolsPending` for every call that has complete input, no output and no `tool-input-error`: it never consults the agent's config, because a server call always gets its output in the same stream. `providerMetadata` of a call is kept for replay.
 - `history.rs`: parsers for the agent list, the conversation list and a stored conversation.
 - `search.rs`: search hits, the `IndexSearch` trait with its real and mock versions, and search page parsing.
-- `http.rs`: the `AgentClient` and `AgentDirectory` traits, `AlgoliaClient`, `spawn_stream`, pagination, status errors and path-segment encoding.
-- `mock.rs`: the mock agent and the demo agent that tests, scenes and demos use.
+- `http.rs`: the `AgentClient` and `AgentDirectory` traits, `AlgoliaClient`, `spawn_stream`, the request body, pagination, status errors and path-segment encoding. Only a trailing assistant message goes out as its parts (`step-start`, `text`, `tool-<name>` with `callProviderMetadata`); every other message is its text, and an empty output is sent as `{"ok": true}`.
+- `client_tools.rs`: the `ClientTools` trait, the 20 s `run_with_timeout`, `non_empty_output` and the fakes.
+- `mock.rs`: the mock agent, its `MockScript::Confetti` script (a pending `throw_confetti` call, then a text reply once the history ends with its result) and the demo agent that tests, scenes and demos use.
 
 ### Chat state (`src/chat.rs` and `src/chat/`)
 
-`Chat` is the application state. Its modules each own one feature: `turn` (send, retry, apply events), `directory` (agent, conversation and message loads), `applications`, `sessions`, `search`, `notifications`, `message_actions`, `keybinds`, `appearance`, `persistence` and `snapshot`. `poll` calls `advance_loads`, `drain_loads`, `track_views` and `drain_turn` in that order.
+`Chat` is the application state. Its modules each own one feature: `turn` (send, retry, continue, apply events), `client_tools` (client tool calls and their workers), `directory` (agent, conversation and message loads), `applications`, `sessions`, `search`, `notifications`, `message_actions`, `keybinds`, `appearance`, `persistence` and `snapshot`. `poll` calls `advance_loads`, `drain_loads`, `track_views`, `drain_turn` and `drain_client_tools` in that order.
 
 - **Loading.** Every background load is a `Load` (`Idle`, `Loading`, `Ready`, `Failed`) read through `Load::phase(now)`: nothing for 150 ms, then a skeleton that stays at least 300 ms. `Chat::screen`, `sidebar_view` and `pane_view` are the only places that decide what to show, so the sidebar and the chat pane never flash a half-loaded state. Loads carry a generation number, so a result for an agent the user already left is dropped.
+- **Client tools.** Each call goes `Awaiting`, `Running`, then `Resolved` (`Ok` or `Err`), or `Declined` out of `Awaiting`; until the approval card exists, every call is approved at once. Workers answer on their own channel, tagged with a turn generation that `reset_client_round` bumps on cancel, retry, a new turn and a failure, so a late result is dropped. Switching application cancels the turn, so it drops results too. `Finished` doesn't settle a turn while a round is open.
 - **New conversations.** A conversation that starts in this run, or a promoted Quick Ask, is marked loaded at once. Fetching it back would blank the pane and replace the live exchange with the server's older copy.
 - **Applications.** `Chat::applications` and `active` hold the saved Algolia applications. `add_application`, `switch_application`, `remove_application` and `switch_to_mock` are the only ways to change them. An app ID must be ten letters or digits because it becomes part of a hostname. Switching cancels any reply, bumps the generation and reopens the application's last agent. A `Connector` builds the client and directory for each application, which is how tests run offline.
 - **Application colors.** `palette.rs` gives each application an `AppColour`, chosen as the least used one, saved by id, and shown as a dot, a swatch picker, the Quick Ask chip and an optional top bar. The colors are Satellite scale steps and brand planets, each at least 3:1 against the page in both appearances and never an accent tone. The name always appears beside the dot, so color is never the only signal.

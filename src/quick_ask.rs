@@ -406,6 +406,8 @@ pub fn poll(s: &mut QuickAsk, t: f64, _: &mut Tx) -> bool {
                         s.merge_tool(call);
                     }
                     StreamEvent::ToolStarted { name, .. } => s.merge_tool(ToolCall {
+                        call_id: String::new(),
+                        provider_metadata: None,
                         name,
                         input: None,
                         open: false,
@@ -413,6 +415,8 @@ pub fn poll(s: &mut QuickAsk, t: f64, _: &mut Tx) -> bool {
                         error: None,
                     }),
                     StreamEvent::ToolFailed { name, error, .. } => s.merge_tool(ToolCall {
+                        call_id: String::new(),
+                        provider_metadata: None,
                         name,
                         input: None,
                         request: None,
@@ -420,6 +424,8 @@ pub fn poll(s: &mut QuickAsk, t: f64, _: &mut Tx) -> bool {
                         open: false,
                     }),
                     StreamEvent::ToolFinished { name, output, .. } => s.merge_tool(ToolCall {
+                        call_id: String::new(),
+                        provider_metadata: None,
                         name,
                         input: output,
                         open: false,

@@ -336,6 +336,7 @@ fn a_quick_ask_shows_the_tools_the_agent_ran() {
         response: "Quick answer",
         chunk_chars: 4,
         tools: mock_tools(),
+        script: None,
     });
     rt.update(|s, _| s.composer.insert("What is new?"));
     rt.update(quick_ask::ask);

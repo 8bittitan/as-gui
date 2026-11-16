@@ -27,13 +27,13 @@ pub struct LoadSender {
 }
 
 impl LoadSender {
-    pub fn send(&self, event: StreamEvent) -> Result<(), mpsc::SendError<StreamEvent>> {
+    pub fn send(&self, event: StreamEvent) -> Result<(), Box<mpsc::SendError<StreamEvent>>> {
         self.tx
             .send(Loaded {
                 generation: self.generation,
                 event,
             })
-            .map_err(|e| mpsc::SendError(e.0.event))
+            .map_err(|e| Box::new(mpsc::SendError(e.0.event)))
     }
 }
 
