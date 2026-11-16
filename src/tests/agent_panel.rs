@@ -343,3 +343,33 @@ fn bindings_follow_the_selected_agent() {
     rt.update(|s, _| s.choose_agent(0));
     assert!(rt.state.bindings.get(TOOL).is_some());
 }
+
+#[test]
+fn the_sheet_leaves_its_skeleton_without_any_input() {
+    let mut rt = sheet_chat();
+    rt.update(|s, _| s.open_agent_panel(None));
+    for _ in 0..600 {
+        rt.frame(1.0 / 60.0);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        if rt.find(&format!("agent-tool-{TOOL}")).is_some() {
+            return;
+        }
+    }
+    panic!("the sheet stayed on its skeleton");
+}
+
+#[test]
+fn the_frame_that_releases_the_sheets_skeleton_reports_a_change() {
+    let mut rt = sheet_chat();
+    let released = std::cell::Cell::new(false);
+    rt.update(|s, tx| {
+        s.agent_panel = Some(Default::default());
+        s.agent_config.load = Load::Loading { since: 0.0 }.finished(0.2);
+        s.last_poll = 0.44;
+        released.set(s.track_views(0.46, tx));
+    });
+    assert!(
+        released.get(),
+        "the view must rebuild when the placeholder lifts"
+    );
+}
