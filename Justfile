@@ -23,7 +23,7 @@ check:
 dev:
   cargo run
 
-# Records a demo video into demos/: the main tour by default, or quick-ask, menu-bar, ask-selection, notify or all.
+# Records a demo video into demos/: the main tour by default, or quick-ask, menu-bar, ask-selection, notify, client-tool or all.
 demo name="tour":
   scripts/demo.sh "{{name}}"
 

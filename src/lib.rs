@@ -252,15 +252,19 @@ pub fn run() {
         chat.update(move |chat, _| {
             chat.attach_registrar(std::rc::Rc::new(quick_ask::PanelShortcuts::new(shortcuts)));
             chat.attach_shell(std::rc::Rc::new(shell));
-            chat.client_tools = Arc::new(agent::Registry::new(
-                agent::Builtins {
-                    shell: Arc::new(tool_shell),
-                    notifier: chat.notifier.clone(),
-                    selection: chat.selection.clone(),
-                },
-                chat.bindings.clone(),
-                Arc::new(agent::SystemRunner),
-            ));
+            chat.client_tools = if demo {
+                Arc::new(agent::DemoTools)
+            } else {
+                Arc::new(agent::Registry::new(
+                    agent::Builtins {
+                        shell: Arc::new(tool_shell),
+                        notifier: chat.notifier.clone(),
+                        selection: chat.selection.clone(),
+                    },
+                    chat.bindings.clone(),
+                    Arc::new(agent::SystemRunner),
+                ))
+            };
             if launch.status_item {
                 menubar::attach_status_item(chat, menu_target, launch.show_window);
             }

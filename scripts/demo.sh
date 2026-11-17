@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Records a demo video into demos/: the main tour by default, one of quick-ask, menu-bar,
-# ask-selection or notify, or all of them in turn. Each demo is demos/<name>.mp4.
+# ask-selection, notify or client-tool, or all of them in turn. Each demo is demos/<name>.mp4.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-DEMOS=(tour quick-ask menu-bar ask-selection notify)
+DEMOS=(tour quick-ask menu-bar ask-selection notify client-tool)
 
 record() {
     local out="demos/$1.mp4"
@@ -13,6 +13,8 @@ record() {
             AS_GUI_DEMO=1 cargo run --release -- --script scripts/demo.json --video "$out" --keys --pointer ;;
         quick-ask)
             AS_GUI_DEMO=1 cargo run --release -- --desktop scripts/backdrop.png --script scripts/demo-quick-ask.json --video "$out" --keys --pointer ;;
+        client-tool)
+            AS_GUI_DEMO=1 AS_GUI_DEMO_CLIENT_TOOL=1 cargo run --release -- --script scripts/demo-client-tool.json --video "$out" --keys --pointer ;;
         menu-bar | ask-selection | notify)
             "scripts/demo-$1.sh" "$out" ;;
     esac

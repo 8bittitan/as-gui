@@ -104,6 +104,7 @@ The demos need `ffmpeg`. `just demo <name>` writes `demos/<name>.mp4`, and the v
 - `just demo menu-bar` records the menu bar icon and its menu. Headless recordings cannot draw a native status item, so the script paints the menu bar and the menu over the video with `ffmpeg`.
 - `just demo ask-selection` records Ask about selection. The script paints a browser window and the selected post. The post's words must match `selection::DEMO_SELECTION`.
 - `just demo notify` records a background notification. The script paints the browser and the macOS banner. The banner text must match the first line of the demo reply, as `notify::first_line` trims it.
+- `just demo client-tool` records a client tool call in the conversation: the agent asks to run `open_url`, the user presses Run, and the reply continues. `AS_GUI_DEMO_CLIENT_TOOL=1` swaps in the agent that makes the call, and demo mode runs the call without opening a browser.
 
 The menu bar and selection scripts share the painted menu bar in `scripts/menu-bar.sh`.
 

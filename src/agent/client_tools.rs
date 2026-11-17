@@ -109,6 +109,21 @@ impl ClientTools for Registry {
     }
 }
 
+/// The tools a recorded demo runs: `open_url` reports success without opening a browser on the
+/// recording Mac, after a beat so the running state shows.
+pub struct DemoTools;
+
+impl ClientTools for DemoTools {
+    fn run(&self, name: &str, input: &Value) -> Result<Value, String> {
+        if name != "open_url" {
+            return Err(format!("No tool implemented for \"{name}\"."));
+        }
+        let url = input["url"].as_str().ok_or("url is required.")?;
+        std::thread::sleep(Duration::from_millis(700));
+        Ok(json!({ "opened": url }))
+    }
+}
+
 /// Succeeds at every call without doing anything, for tests.
 #[cfg(test)]
 pub struct FakeClientTools;
@@ -209,6 +224,17 @@ mod tests {
         let tools = Arc::new(Sleepy(Duration::from_millis(500)));
         let result = run_with_timeout(tools, "slow".into(), json!({}), Duration::from_millis(20));
         assert_eq!(result, Err(TIMED_OUT.into()));
+    }
+
+    #[test]
+    fn the_demo_tools_report_a_url_opened_without_opening_it() {
+        assert_eq!(
+            DemoTools.run("open_url", &json!({ "url": "https://a.com" })),
+            Ok(json!({ "opened": "https://a.com" }))
+        );
+        assert_eq!(DemoTools.handler("open_url"), Handler::Builtin);
+        assert!(DemoTools.run("open_url", &json!({})).is_err());
+        assert!(DemoTools.run("mystery", &json!({})).is_err());
     }
 
     #[test]

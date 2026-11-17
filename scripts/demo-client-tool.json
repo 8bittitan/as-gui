@@ -1,0 +1,9 @@
+[
+  {"t": 1.5, "type": "tap", "key": "agent-mock-shopping"},
+  {"t": 2.7, "type": "tap", "key": "input"},
+  {"t": 3.2, "type": "type", "text": "Open the wide-fit guide for me", "every": 0.05},
+  {"t": 5.4, "type": "tap", "key": "send"},
+  {"t": 9.0, "type": "tap", "key": "approval-run-demo_open_guide"},
+  {"t": 13.0, "type": "tap", "key": "tool-open_url"},
+  {"t": 16.0, "type": "mark", "name": "end"}
+]
