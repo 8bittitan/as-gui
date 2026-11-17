@@ -1,6 +1,30 @@
 # Changelog
 
 <!-- git-cliff: end of header -->
+## [0.0.3] - 2026-11-17
+
+### 🚀 Features
+
+- *(agent)* Support client_side tools ([#14](https://github.com/8bittitan/as-gui/issues/14))
+- *(chat)* Render markdown images in replies
+
+### 🐛 Bug Fixes
+
+- *(release)* Write notes into bundle dir so artifact is flat
+- *(shell)* Show window tint with one application
+
+### 📚 Documentation
+
+- *(agents)* Add client tools task plan
+
+### ⚙️ Miscellaneous Tasks
+
+- *(agents)* Add new-benchmark skill
+
+### 💼 Other
+
+- *(release)* Push with --follow-tags, highlight hint
+
 ## [0.0.2] - 2026-11-14
 
 ### 🚀 Features
