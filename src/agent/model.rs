@@ -18,7 +18,7 @@ pub struct ChatMessage {
     pub tools: Vec<ToolCall>,
     /// The reply as the stream laid it out, which a continued turn replays to the server.
     pub parts: Vec<Part>,
-    /// Seconds the turn spent "thinking", recorded when the stream settles.
+    /// Seconds the stream spent in reasoning blocks; None when it never reasoned.
     pub thought: Option<f64>,
     pub streaming: bool,
     /// This message's 👍/👎, once the vote was sent.
@@ -407,6 +407,8 @@ pub enum StreamEvent {
     ConversationStarted(String),
     /// A step began (`start-step`): the next text and tools belong to it.
     StepStart,
+    ReasoningStarted,
+    ReasoningEnded,
     /// The stream ended with these calls holding complete input and no output: the client
     /// runs them and continues the turn.
     ClientToolsPending(Vec<PendingCall>),

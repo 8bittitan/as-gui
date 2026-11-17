@@ -162,7 +162,7 @@ pub struct Chat {
     pub composer: TextEdit,
     pub pending: bool,
     pub error: Option<String>,
-    turn_started: Option<f64>,
+    reasoning_since: Option<f64>,
     events: Option<Receiver<Timed>>,
     turn_origin: Option<(Instant, f64)>,
     next_id: u64,
@@ -248,7 +248,7 @@ impl Chat {
             composer: TextEdit::new(""),
             pending: false,
             error: None,
-            turn_started: None,
+            reasoning_since: None,
             events: None,
             turn_origin: None,
             next_id: 0,
@@ -305,12 +305,14 @@ impl Chat {
             | StreamEvent::Suggestions(_)
             | StreamEvent::TextDelta(_)
             | StreamEvent::StepStart
+            | StreamEvent::ReasoningStarted
+            | StreamEvent::ReasoningEnded
             | StreamEvent::ToolUsed(_)
             | StreamEvent::ToolStarted { .. }
             | StreamEvent::ToolFailed { .. }
             | StreamEvent::ToolFinished { .. }
             | StreamEvent::Finished
-            | StreamEvent::Failed(_) => self.apply_turn(ev),
+            | StreamEvent::Failed(_) => self.apply_turn(ev, at),
             StreamEvent::ClientToolsPending(_)
             | StreamEvent::ClientToolRunning { .. }
             | StreamEvent::ClientToolResolved { .. } => self.apply_client_tools(ev),

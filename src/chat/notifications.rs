@@ -18,7 +18,11 @@ impl Chat {
         if !self.notify_replies || self.notifier.focused() {
             return;
         }
-        let duration = self.streaming_message().and_then(|m| m.thought);
+        let now = self.now;
+        let duration = self
+            .streaming_message()
+            .and_then(|m| m.trace.as_ref())
+            .map(|trace| now - trace.sent);
         if duration.is_none_or(|d| d < MIN_TURN_SECS) {
             return;
         }

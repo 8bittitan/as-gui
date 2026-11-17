@@ -10,6 +10,8 @@ pub fn parse_sse_line(line: &str) -> Option<StreamEvent> {
     let v: serde_json::Value = serde_json::from_str(data).ok()?;
     match v.get("type")?.as_str()? {
         "start-step" => Some(StreamEvent::StepStart),
+        "reasoning-start" => Some(StreamEvent::ReasoningStarted),
+        "reasoning-end" => Some(StreamEvent::ReasoningEnded),
         "start" => Some(StreamEvent::Start {
             message_id: v
                 .get("messageId")
@@ -154,9 +156,7 @@ fn recognised_but_ignored(line: &str) -> bool {
             "finish-step"
             | "text-start"
             | "text-end"
-            | "reasoning-start"
             | "reasoning-delta"
-            | "reasoning-end"
             | "finish"
             | "tool-input-start"
             | "tool-input-delta"
@@ -903,8 +903,14 @@ mod tests {
             r#"data: {"type":"reasoning-delta","id":"m1","delta":"Maybe the error is in the index."}"#,
             r#"data: {"type":"reasoning-end","id":"m1"}"#,
         ];
-        assert_eq!(decode(&lines), Ok(vec![]));
-        assert!(lines.iter().all(|l| recognised_but_ignored(l)));
+        assert_eq!(
+            decode(&lines),
+            Ok(vec![
+                StreamEvent::ReasoningStarted,
+                StreamEvent::ReasoningEnded
+            ])
+        );
+        assert!(recognised_but_ignored(lines[1]));
     }
 
     #[test]

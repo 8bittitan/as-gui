@@ -119,6 +119,8 @@ impl AgentClient for MockAgent {
             confetti_script(history, emit);
             return Ok(());
         }
+        emit(StreamEvent::ReasoningStarted);
+        emit(StreamEvent::ReasoningEnded);
         for tool in &self.tools {
             emit(StreamEvent::ToolUsed(tool.clone()));
         }

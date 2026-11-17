@@ -75,7 +75,9 @@ fn the_composer_glows_only_while_a_turn_is_streaming() {
     settle(&mut rt);
     assert!(rt.find("composer-glow").is_none(), "no glow at rest");
 
-    let sender = rt.state.begin_turn("Hi");
+    let mut sender = None;
+    rt.update(|s, _| sender = Some(s.begin_turn("Hi")));
+    let sender = sender.unwrap();
     settle(&mut rt);
     assert!(
         rt.find("composer-glow").is_some(),

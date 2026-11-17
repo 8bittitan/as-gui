@@ -216,6 +216,14 @@ fn user_bubble(k: &rune_kit::Kit, m: &ChatMessage) -> El {
         )
 }
 
+pub(crate) fn thought_label(secs: f64) -> String {
+    if secs < 1.0 {
+        "Thought briefly".into()
+    } else {
+        format!("Thought for {secs:.0}s")
+    }
+}
+
 /// Satellite's subtle ChatMessage: no card, the thread's full width. Its actions show on
 /// hover or keyboard focus, except on the latest reply, where they stay.
 fn assistant_bubble(s: &Chat, k: &rune_kit::Kit, m: &ChatMessage, latest: bool) -> El {
@@ -233,7 +241,7 @@ fn assistant_bubble(s: &Chat, k: &rune_kit::Kit, m: &ChatMessage, latest: bool) 
                 .center_y()
                 .child(icon(&icons::BRAIN, 12.0).color(k.c.icon_muted))
                 .child(
-                    text(format!("Thought for {secs:.0}s"))
+                    text(thought_label(secs))
                         .font(typography::CAPTION)
                         .color(k.c.text_muted),
                 ),

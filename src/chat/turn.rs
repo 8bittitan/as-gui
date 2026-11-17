@@ -63,7 +63,7 @@ impl Chat {
     /// thread keeps running; its sends fail silently against the dropped receiver.
     pub(super) fn cancel_turn(&mut self) {
         self.events = None;
-        self.turn_started = None;
+        self.reasoning_since = None;
         self.pending = false;
         self.reset_client_round();
         if let Some(m) = self.sessions[self.current].messages.last_mut() {
@@ -76,11 +76,11 @@ impl Chat {
         session.messages.last_mut()
     }
 
-    fn record_thought(&mut self, now: f64) {
-        if let Some(started) = self.turn_started.take()
+    fn close_reasoning(&mut self, at: f64) {
+        if let Some(since) = self.reasoning_since.take()
             && let Some(m) = self.streaming_message()
         {
-            m.thought = Some((now - started).max(0.0));
+            m.thought = Some(m.thought.unwrap_or(0.0) + (at - since).max(0.0));
         }
     }
 
@@ -220,8 +220,15 @@ impl Chat {
     }
 
     /// Applies a turn event to the streaming reply.
-    pub(super) fn apply_turn(&mut self, ev: StreamEvent) {
+    pub(super) fn apply_turn(&mut self, ev: StreamEvent, at: f64) {
+        if matches!(ev, StreamEvent::Finished | StreamEvent::Failed(_)) {
+            self.close_reasoning(at);
+        }
         match ev {
+            StreamEvent::ReasoningStarted => {
+                self.reasoning_since.get_or_insert(at);
+            }
+            StreamEvent::ReasoningEnded => self.close_reasoning(at),
             StreamEvent::Start { message_id } => {
                 let session = &mut self.sessions[self.current];
                 session.agent_message_id = Some(message_id.clone());
@@ -337,26 +344,14 @@ impl Chat {
         }
     }
 
-    /// Drains the request thread's events. Frame time `t` also records how long the turn
-    /// thought, shown on the assistant message once it settles. True when state changed.
+    /// Drains the request thread's events, stamped with their arrival on the frame clock `t`.
+    /// True when state changed.
     pub(super) fn drain_turn(&mut self, t: f64) -> bool {
         let mut changed = false;
-        if self.pending && self.turn_started.is_none() {
-            self.turn_started = Some(t);
-            changed = true;
-        }
         let mut dead = false;
         while let Some(receiver) = self.events.as_ref() {
             match receiver.try_recv() {
                 Ok(Timed { event, at }) => {
-                    let settles = match event {
-                        StreamEvent::Finished => !self.client_round_open(),
-                        StreamEvent::Failed(_) => true,
-                        _ => false,
-                    };
-                    if settles {
-                        self.record_thought(t);
-                    }
                     let received = self.turn_origin.map_or(t, |(origin, base)| {
                         base + at.saturating_duration_since(origin).as_secs_f64()
                     });
@@ -374,7 +369,7 @@ impl Chat {
             self.events = None;
             // A stream that ended on client tool calls is finished: the turn waits on them.
             if self.pending && !self.client_round_open() {
-                self.record_thought(t);
+                self.close_reasoning(t);
                 self.pending = false;
                 if let Some(m) = self.sessions[self.current].messages.last_mut() {
                     m.streaming = false;

@@ -1432,31 +1432,85 @@ fn choosing_an_agent_mid_stream_cancels_cleanly() {
     );
 }
 
-#[test]
-fn a_finished_turn_records_thought_time() {
+fn thinking_chat() -> Runtime<Chat> {
     let mut rt = test_chat();
     rt.update(|s, _| s.selected_agent = Some(agent_one()));
     rt.frame(0.0);
-    let sender = rt.state.begin_turn("Think about it");
+    rt.state.begin_turn("Think about it");
+    rt
+}
 
-    settle(&mut rt);
-    assert!(rt.state.pending);
-    assert!(rt.state.sessions[0].messages[1].thought.is_none());
+#[test]
+fn thought_time_counts_only_the_reasoning_block() {
+    let mut rt = thinking_chat();
+    rt.state.apply_at(StreamEvent::ReasoningStarted, 1.0);
+    rt.state.apply_at(StreamEvent::ReasoningEnded, 3.0);
+    rt.state
+        .apply_at(StreamEvent::TextDelta("Answer".into()), 9.0);
+    rt.state.apply_at(StreamEvent::Finished, 10.0);
 
-    sender.send(StreamEvent::Finished).unwrap();
-    drop(sender);
+    let m = &rt.state.sessions[0].messages[1];
+    let thought = m.thought.expect("reasoning was recorded");
+    assert!(
+        (thought - 2.0).abs() < 1e-9,
+        "not the turn's 10s: {thought}"
+    );
+}
+
+#[test]
+fn separate_reasoning_blocks_add_up() {
+    let mut rt = thinking_chat();
+    rt.state.apply_at(StreamEvent::ReasoningStarted, 1.0);
+    rt.state.apply_at(StreamEvent::ReasoningEnded, 2.0);
+    rt.state.apply_at(StreamEvent::ReasoningStarted, 5.0);
+    rt.state.apply_at(StreamEvent::ReasoningEnded, 8.0);
+
+    let thought = rt.state.sessions[0].messages[1].thought.unwrap();
+    assert!((thought - 4.0).abs() < 1e-9, "{thought}");
+}
+
+#[test]
+fn a_reasoning_block_left_open_closes_when_the_turn_settles() {
+    let mut rt = thinking_chat();
+    rt.state.apply_at(StreamEvent::ReasoningStarted, 1.0);
+    rt.state.apply_at(StreamEvent::Failed("boom".into()), 4.0);
+
+    let thought = rt.state.sessions[0].messages[1].thought.unwrap();
+    assert!((thought - 3.0).abs() < 1e-9, "{thought}");
+}
+
+#[test]
+fn a_turn_without_reasoning_shows_no_thought_row() {
+    let mut rt = thinking_chat();
+    rt.state
+        .apply_at(StreamEvent::TextDelta("Answer".into()), 2.0);
+    rt.state.apply_at(StreamEvent::Finished, 10.0);
     rt.frame(1.0 / 60.0);
 
     let m = &rt.state.sessions[0].messages[1];
-    let thought = m.thought.expect("the turn's duration is recorded");
-    assert!(
-        (thought - 0.5).abs() < 0.05,
-        "thought spans the virtual time between the first poll and the finish: {thought}"
-    );
-    assert!(
-        rt.find(&format!("thought-{}", m.id)).is_some(),
-        "the thought row renders after the turn settles"
-    );
+    assert!(m.thought.is_none());
+    assert!(rt.find(&format!("thought-{}", m.id)).is_none());
+}
+
+#[test]
+fn a_settled_turn_with_reasoning_renders_the_thought_row() {
+    let mut rt = thinking_chat();
+    rt.update(|s, _| {
+        s.apply_at(StreamEvent::ReasoningStarted, 1.0);
+        s.apply_at(StreamEvent::ReasoningEnded, 3.0);
+        s.apply_at(StreamEvent::Finished, 4.0);
+    });
+    rt.frame(1.0 / 60.0);
+
+    let id = rt.state.sessions[0].messages[1].id.clone();
+    assert!(rt.find(&format!("thought-{id}")).is_some());
+}
+
+#[test]
+fn thought_label_says_briefly_under_a_second() {
+    assert_eq!(crate::conversation::thought_label(0.0), "Thought briefly");
+    assert_eq!(crate::conversation::thought_label(0.99), "Thought briefly");
+    assert_eq!(crate::conversation::thought_label(2.0), "Thought for 2s");
 }
 
 #[test]
