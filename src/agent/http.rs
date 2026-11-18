@@ -289,17 +289,26 @@ impl AgentClient for AlgoliaClient {
             emit(StreamEvent::ConversationStarted(id.to_string()));
         }
         let reader = response.into_body().into_reader();
-        let mut decoder = Decoder::default();
-        for line in std::io::BufReader::new(reader).lines() {
-            let line = line.map_err(|e| {
-                warn!("stream read failed after {} deltas: {e}", decoder.deltas);
-                format!("stream read failed: {e}")
-            })?;
-            decoder.line(&line)?.into_iter().for_each(&mut *emit);
-        }
-        decoder.finish().into_iter().for_each(emit);
-        Ok(())
+        read_stream(std::io::BufReader::new(reader), emit)
     }
+}
+
+/// Decodes the stream's lines into `emit` and stops at the `finish` part: the connection can
+/// stay open after it, and nothing the UI uses comes later.
+fn read_stream(reader: impl BufRead, emit: &mut dyn FnMut(StreamEvent)) -> Result<(), String> {
+    let mut decoder = Decoder::default();
+    for line in reader.lines() {
+        let line = line.map_err(|e| {
+            warn!("stream read failed after {} deltas: {e}", decoder.deltas);
+            format!("stream read failed: {e}")
+        })?;
+        decoder.line(&line)?.into_iter().for_each(&mut *emit);
+        if decoder.finished {
+            break;
+        }
+    }
+    decoder.finish().into_iter().for_each(emit);
+    Ok(())
 }
 
 impl AgentDirectory for AlgoliaClient {
@@ -397,6 +406,76 @@ mod tests {
             agent_studio_url("APPID12345", "agents?page=1&limit=100"),
             "https://APPID12345.algolia.net/agent-studio/1/agents?page=1&limit=100"
         );
+    }
+
+    struct PanicsPastTheEnd(std::io::Cursor<Vec<u8>>);
+
+    impl std::io::Read for PanicsPastTheEnd {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.read(buf)? {
+                0 => panic!("read past the end of the data"),
+                n => Ok(n),
+            }
+        }
+    }
+
+    fn read_lines(lines: &[&str], emit: &mut Vec<StreamEvent>) {
+        let body = lines.join("\n\n") + "\n\n";
+        read_stream(
+            std::io::BufReader::new(PanicsPastTheEnd(std::io::Cursor::new(body.into_bytes()))),
+            &mut |event| emit.push(event),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn the_stream_stops_reading_at_finish() {
+        let mut events = Vec::new();
+        read_lines(
+            &[
+                r#"data: {"type":"text-delta","id":"m1","delta":"Hi"}"#,
+                r#"data: {"type":"finish"}"#,
+            ],
+            &mut events,
+        );
+        assert_eq!(events, vec![StreamEvent::TextDelta("Hi".into())]);
+    }
+
+    #[test]
+    fn suggestions_before_finish_still_arrive() {
+        let mut events = Vec::new();
+        read_lines(
+            &[
+                r#"data: {"type":"data-suggestions","data":{"suggestions":["Next?"]}}"#,
+                r#"data: {"type":"finish"}"#,
+            ],
+            &mut events,
+        );
+        assert_eq!(events, vec![StreamEvent::Suggestions(vec!["Next?".into()])]);
+    }
+
+    #[test]
+    fn a_client_call_waiting_at_finish_is_still_pending() {
+        let mut events = Vec::new();
+        read_lines(
+            &[
+                r#"data: {"type":"tool-input-available","toolCallId":"c1","toolName":"throw_confetti","input":{}}"#,
+                r#"data: {"type":"finish"}"#,
+            ],
+            &mut events,
+        );
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::ClientToolsPending(calls)) if calls.len() == 1
+        ));
+    }
+
+    #[test]
+    fn a_stream_without_finish_ends_when_the_body_does() {
+        let body = "data: {\"type\":\"text-delta\",\"id\":\"m1\",\"delta\":\"Hi\"}\n\n";
+        let mut events = Vec::new();
+        read_stream(std::io::Cursor::new(body), &mut |event| events.push(event)).unwrap();
+        assert_eq!(events, vec![StreamEvent::TextDelta("Hi".into())]);
     }
 
     #[test]

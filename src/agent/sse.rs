@@ -428,6 +428,7 @@ pub(super) struct Decoder {
     wrote_text: bool,
     paragraph_pending: bool,
     pub(super) deltas: usize,
+    pub(super) finished: bool,
 }
 
 impl Decoder {
@@ -457,6 +458,11 @@ impl Decoder {
             }
             "text-start" => {
                 self.paragraph_pending = self.wrote_text;
+                return Ok(events);
+            }
+            "finish" => {
+                debug!("stream finish part");
+                self.finished = true;
                 return Ok(events);
             }
             "data-guardrail-violation" => {
